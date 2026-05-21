@@ -182,12 +182,49 @@
     return text.slice(after, end).trim();
   }
 
+  // Split a course string by degree-prefix tokens (BArch, BTech, MSc, etc.).
+  // Used as fallback when newline/comma splitting yields one mega-blob.
+  const DEGREE_TOKEN = /\b(?:B(?:Arch|Tech|Pharm|Sc|Com|BA|CA)|M(?:Sc|Tech|Pharm|BA|CA|UP|S|A)|IMSc|PhD)\b/g;
+  function splitCoursesByDegree(text) {
+    if (!text) return [];
+    const delimited = text.replace(new RegExp(`\\s*(?=${DEGREE_TOKEN.source})`, "g"), "");
+    return delimited.split("").map((s) => s.trim()).filter(Boolean);
+  }
+
+  // Parse criteria text into circuital / non-circuital CGPAs.
+  function parseCGPA(text) {
+    if (!text) return null;
+    const circ = text.match(/non[\s\-]?circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
+    const ncirc = circ; // placeholder so eslint doesn't complain; we'll redo
+    const nonCircM = text.match(/non[\s\-]?circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
+    const circM = text.match(/(?:^|[^a-z])circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
+    if (circM || nonCircM) {
+      return {
+        circuital: circM?.[1] || null,
+        nonCircuital: nonCircM?.[1] || null,
+      };
+    }
+    const single = text.match(/(\d+(?:\.\d+)?)/);
+    if (single) return { both: single[1] };
+    return null;
+  }
+
+  function cleanJD(s) {
+    if (!s) return "";
+    let t = s.replace(/click\s*here.*$/gi, "").trim();
+    t = t.replace(/\s*\|\s*/g, " · ");
+    if (t.length > 600) t = t.slice(0, 600) + "…";
+    return t;
+  }
+
   function parseDetailPage(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const data = {
       type: "", designation: "", jobDescription: "", placeOfPosting: "",
       stipendUG: "", stipendPG: "", basePay: "", ctc: "",
       courses: "", criteriaUG: "", criteriaPG: "",
+      cgpaCirc: "", cgpaNonCirc: "", cgpaSame: false,
+      skillSet: "",
       companyURL: "", yearOfEstablishment: "",
     };
 
@@ -195,13 +232,16 @@
       const cells = Array.from(tr.querySelectorAll("td, th"));
       if (cells.length < 2) return;
       const label = (cells[0].innerText || "").toLowerCase().trim();
+      // Skip if label is too long — it's not a real label cell, just data
+      if (label.length > 40) return;
       const value = cells.slice(1).map((c) => (c.innerText || "").trim()).filter(Boolean).join(" | ");
-      if (!value) return;
+      if (!value || value.length > 1500) return; // skip mega-cells
       if (/job ?designation|^designation$/.test(label)) data.designation ||= value;
       else if (/^job ?description$|^description$/.test(label)) data.jobDescription ||= value;
       else if (/place ?of ?posting|^location$/.test(label)) data.placeOfPosting ||= value;
-      else if (/^url$/.test(label)) data.companyURL ||= value;
+      else if (/^url$/.test(label) && !data.companyURL) data.companyURL = value;
       else if (/year ?of ?establishment/.test(label)) data.yearOfEstablishment ||= value;
+      else if (/^required\s*skill ?set$|^skill ?set$|^skills$/.test(label)) data.skillSet ||= value;
     });
 
     const bodyText = (doc.body?.innerText || "").replace(/\r/g, "");
@@ -237,7 +277,11 @@
     if (elig) {
       const coursesM = elig.match(/Courses\s*:?\s*([\s\S]*?)(?=Criteria|$)/i);
       if (coursesM) {
-        const parts = coursesM[1].split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+        let parts = coursesM[1].split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+        // Fallback: if newline/comma split gave one mega-blob, split by degree prefix.
+        if (parts.length === 1 && parts[0].length > 30) {
+          parts = splitCoursesByDegree(parts[0]);
+        }
         data.courses = Array.from(new Set(parts)).join(", ");
       }
       const ug = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
@@ -245,6 +289,32 @@
       if (ug) data.criteriaUG = ug[1].trim();
       if (pg) data.criteriaPG = pg[1].trim();
     }
+
+    // Parse circuital vs non-circuital CGPA from the criteria text.
+    const cgInfo = parseCGPA(data.criteriaUG || elig || bodyText);
+    if (cgInfo) {
+      if (cgInfo.both) {
+        data.cgpaCirc = cgInfo.both;
+        data.cgpaNonCirc = cgInfo.both;
+        data.cgpaSame = true;
+      } else {
+        data.cgpaCirc = cgInfo.circuital || "";
+        data.cgpaNonCirc = cgInfo.nonCircuital || "";
+        data.cgpaSame = cgInfo.circuital && cgInfo.nonCircuital && cgInfo.circuital === cgInfo.nonCircuital;
+      }
+    }
+
+    // SkillSet fallback: bodyText pattern.
+    if (!data.skillSet) {
+      const m = bodyText.match(/Required\s*Skill ?Set\s*[:\-]\s*([^\n]+)/i);
+      if (m) {
+        let s = m[1].replace(/click\s*here.*$/i, "").trim();
+        if (s.length > 4 && s.length < 300) data.skillSet = s;
+      }
+    }
+
+    // Clean up jobDescription: drop "Click Here" suffixes, replace | with ·, cap length.
+    if (data.jobDescription) data.jobDescription = cleanJD(data.jobDescription);
 
     return data;
   }
@@ -591,6 +661,16 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       });
     }
     branchFiltered.forEach((r) => delete r._origIdx);
+
+    // Attach matchingCourses: subset of courses that match the user's selected branches.
+    const enabledBranchList = Object.entries(options.branches || {}).filter(([, v]) => v).map(([k]) => k);
+    branchFiltered.forEach((r) => {
+      const list = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const matching = list.filter((c) =>
+        enabledBranchList.some((b) => (BRANCH_PATTERNS[b] || []).some((re) => re.test(c)))
+      );
+      r.matchingCourses = matching.length ? Array.from(new Set(matching)).join(", ") : "";
+    });
 
     // Attach explicit annualCTC + source on every row, then sort ascending.
     branchFiltered.forEach((r) => {

@@ -158,7 +158,31 @@ function parseDeadline(s) {
 function selectedBadge(r) {
   const n = r.selectedCount || 0;
   const cls = n === 0 ? "sel-corner zero" : "sel-corner";
-  return `<span class="${cls}" title="Final-round selected candidates">${n === 0 ? "—" : "✓ " + n + " selected"}</span>`;
+  const label = n === 0 ? "0 selected" : `✓ ${n} selected`;
+  return `<span class="${cls}" title="Final-round selected candidates">${label}</span>`;
+}
+
+function cgpaCardDisplay(r) {
+  // Returns inline-html-safe string.
+  if (r.cgpaSame && r.cgpaCirc) {
+    return `<strong>${escapeHtml(r.cgpaCirc)}</strong> (circuital = non-circuital)`;
+  }
+  if (r.cgpaCirc && r.cgpaNonCirc && r.cgpaCirc !== r.cgpaNonCirc) {
+    return `Circ <strong>${escapeHtml(r.cgpaCirc)}</strong> · Non-circ <strong>${escapeHtml(r.cgpaNonCirc)}</strong>`;
+  }
+  if (r.cgpaCirc) return `Circuital <strong>${escapeHtml(r.cgpaCirc)}</strong>`;
+  if (r.cgpaNonCirc) return `Non-circ <strong>${escapeHtml(r.cgpaNonCirc)}</strong>`;
+  if (r.criteriaUG) return escapeHtml(r.criteriaUG.slice(0, 80));
+  return "";
+}
+
+function matchingCoursesDisplay(r) {
+  // Prefer pre-computed matchingCourses (only branches the user filtered for).
+  const src = r.matchingCourses || r.courses || "";
+  const list = src.split(",").map((s) => s.trim()).filter(Boolean);
+  if (list.length === 0) return "";
+  if (list.length <= 5) return list.map((c) => escapeHtml(c)).join(", ");
+  return list.slice(0, 5).map((c) => escapeHtml(c)).join(", ") + ` <em>+${list.length - 5} more</em>`;
 }
 
 function selectedGridHTML(r) {
@@ -168,23 +192,34 @@ function selectedGridHTML(r) {
 }
 
 function detailsHTML(r) {
+  const cgpa = cgpaCardDisplay(r);
+  const allCourses = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const matchCourses = (r.matchingCourses || "").split(",").map((s) => s.trim()).filter(Boolean);
   return `
+    ${r.skillSet ? `<h4>Required SkillSet</h4><div class="body">${escapeHtml(r.skillSet)}</div>` : ""}
     ${r.jobDescription ? `<h4>Full Job Description</h4><div class="body">${escapeHtml(r.jobDescription)}</div>` : ""}
     ${(r.stipendUG || r.stipendPG || r.basePay || r.ctc) ? `
       <h4>Compensation breakdown</h4>
       <div class="body">${[
-        r.ctc ? `CTC: ${escapeHtml(r.ctc)}` : "",
-        r.basePay ? `Base Pay: ${escapeHtml(r.basePay)}` : "",
-        r.stipendUG ? `Stipend UG: ₹${escapeHtml(r.stipendUG)}/mo` : "",
-        r.stipendPG ? `Stipend PG: ₹${escapeHtml(r.stipendPG)}/mo` : "",
-        r.annualCTCDisplay ? `<strong>Annual CTC: ${escapeHtml(r.annualCTCDisplay)}</strong>` : "",
-      ].filter(Boolean).join(" · ")}</div>` : ""}
+        r.ctc ? `<strong>CTC:</strong> ${escapeHtml(r.ctc)}` : "",
+        r.basePay ? `<strong>Base Pay:</strong> ${escapeHtml(r.basePay)}` : "",
+        r.stipendUG ? `<strong>Stipend UG:</strong> ₹${escapeHtml(r.stipendUG)}/month` : "",
+        r.stipendPG ? `<strong>Stipend PG:</strong> ₹${escapeHtml(r.stipendPG)}/month` : "",
+        r.annualCTCDisplay ? `<strong>Annual CTC equivalent:</strong> ${escapeHtml(r.annualCTCDisplay)}` : "",
+      ].filter(Boolean).join("<br/>")}</div>` : ""}
+    ${cgpa ? `<h4>CGPA Cutoff</h4><div class="body">${cgpa}</div>` : ""}
     ${(r.criteriaUG || r.criteriaPG) ? `
-      <h4>Eligibility criteria</h4>
+      <h4>Eligibility criteria (raw)</h4>
       <div class="body">${[
         r.criteriaUG ? `UG: ${escapeHtml(r.criteriaUG)}` : "",
         r.criteriaPG ? `PG: ${escapeHtml(r.criteriaPG)}` : "",
       ].filter(Boolean).join("<br/>")}</div>` : ""}
+    ${matchCourses.length || allCourses.length ? `
+      <h4>Eligible courses</h4>
+      <div class="body">
+        ${matchCourses.length ? `<div><strong>Matching your branches:</strong> ${matchCourses.map(escapeHtml).join(", ")}</div>` : ""}
+        ${allCourses.length > matchCourses.length ? `<div style="color:var(--muted); margin-top: 6px;"><strong>All eligible:</strong> ${allCourses.map(escapeHtml).join(", ")}</div>` : ""}
+      </div>` : ""}
     ${r.selectedCount ? `
       <h4>Selected candidates (${r.selectedCount})</h4>
       <div class="branch-tally">${(r.selectedByBranch || "").split(",").filter(Boolean)
@@ -200,21 +235,19 @@ function detailsHTML(r) {
 
 function cardHTML(r, idx) {
   const pay = payDisplay(r);
-  const courses = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const summary = r.jdSummary || (r.jobDescription || "").slice(0, 200);
   const subline = [r.designation, r.placeOfPosting].filter(Boolean).join(" · ");
+  const summary = r.jdSummary || "";
 
   const badges = [];
   if (r.type) badges.push(`<span class="badge type">${escapeHtml(r.type)}</span>`);
-  if (r.criteriaUG && /\d/.test(r.criteriaUG)) badges.push(`<span class="badge cgpa">${escapeHtml(r.criteriaUG)}</span>`);
-  // Grid view shows only branches + stipend; list view shows everything.
-  if (viewMode === "grid") {
-    courses.slice(0, 3).forEach((c) => badges.push(`<span class="badge">${escapeHtml(c)}</span>`));
-    if (courses.length > 3) badges.push(`<span class="badge">+${courses.length - 3}</span>`);
-  } else {
-    courses.slice(0, 4).forEach((c) => badges.push(`<span class="badge">${escapeHtml(c)}</span>`));
-    if (courses.length > 4) badges.push(`<span class="badge">+${courses.length - 4} more</span>`);
-  }
+  const cgpa = cgpaCardDisplay(r);
+  const branches = matchingCoursesDisplay(r);
+
+  const infoRows = [];
+  if (branches) infoRows.push(`<div class="info-row" data-key="branches"><span class="ilabel">Branches</span><span class="ival">${branches}</span></div>`);
+  if (cgpa) infoRows.push(`<div class="info-row" data-key="cgpa"><span class="ilabel">CGPA</span><span class="ival">${cgpa}</span></div>`);
+  infoRows.push(`<div class="info-row" data-key="selected"><span class="ilabel">Selected</span><span class="ival">${r.selectedCount ? `<strong>${r.selectedCount}</strong> · ${escapeHtml(r.selectedByBranch || "—")}` : '<span class="empty">no final result yet</span>'}</span></div>`);
+  if (r.skillSet) infoRows.push(`<div class="info-row" data-key="skills"><span class="ilabel">Skills</span><span class="ival">${escapeHtml(r.skillSet)}</span></div>`);
 
   return `<div class="card" data-idx="${idx}">
     ${selectedBadge(r)}
@@ -223,7 +256,8 @@ function cardHTML(r, idx) {
       <span class="pay">${escapeHtml(pay)}</span>
     </div>
     ${subline ? `<div class="card-sub">${escapeHtml(subline)}</div>` : ""}
-    <div class="badges">${badges.join("")}</div>
+    ${badges.length ? `<div class="badges">${badges.join("")}</div>` : ""}
+    <div class="info-rows">${infoRows.join("")}</div>
     ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ""}
     <div class="toggle-hint">Click for full details ↓</div>
     <div class="pay-only">
@@ -520,7 +554,11 @@ const EXPORT_COLUMNS = [
   ["AI Summary", "jdSummary"],
   ["Job Description", "jobDescription"],
   ["Place of Posting", "placeOfPosting"],
-  ["Eligible Courses", "courses"],
+  ["Eligible Courses (all)", "courses"],
+  ["Matching Branches", "matchingCourses"],
+  ["CGPA Circuital", "cgpaCirc"],
+  ["CGPA Non-Circuital", "cgpaNonCirc"],
+  ["Required SkillSet", "skillSet"],
   ["UG Criteria", "criteriaUG"],
   ["PG Criteria", "criteriaPG"],
   ["Stipend UG (₹/mo)", "stipendUG"],
