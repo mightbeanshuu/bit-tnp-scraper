@@ -42,6 +42,17 @@
       background: var(--grad); color: white; padding: 4px 10px;
       border-radius: 999px; font-size: 11px; font-weight: 600;
     }
+    button.dl {
+      padding: 8px 12px; font-size: 12px; border: 1px solid var(--border);
+      background: white; color: #5a1eb4; border-radius: 8px; font-weight: 700;
+      cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.08s;
+    }
+    button.dl:hover { background: #faf6ff; border-color: #5a1eb4; }
+    button.dl:active { transform: scale(0.97); }
+    button.dl.primary {
+      background: var(--grad); color: white; border-color: transparent;
+      box-shadow: 0 2px 8px rgba(90,30,180,0.25);
+    }
 
     .slider-wrap {
       margin-top: 14px;
@@ -161,6 +172,10 @@
         <option value="company-asc">Sort: Company A → Z</option>
       </select>
       <span class="pill" id="branchPill">All branches</span>
+      <div style="flex-grow:1"></div>
+      <button id="dlCSV" class="dl">⬇ CSV</button>
+      <button id="dlXLSX" class="dl">⬇ Excel</button>
+      <button id="dlPDF" class="dl primary">⬇ PDF</button>
     </div>
 
     <div class="slider-wrap">
