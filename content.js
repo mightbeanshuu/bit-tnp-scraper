@@ -1,24 +1,26 @@
-// BIT TNP Scraper — content script (v2)
-// Crawls the dashboard table, fetches each /job/info/<hash> page, parses
-// labelled fields, filters by branch, sorts by compensation, exports CSV.
+// BIT TNP Scraper — content script (v3)
+// Three-stage crawl:
+//   1. Dashboard table → company list + detail/notice URLs
+//   2. /job/info/<hash>  → JD, designation, stipend, eligibility (Courses + Criteria), CTC
+//   3. /job/notice/<hash> → /resultlist/<id>/<hash> link → selected candidates table
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
   window.__BIT_TNP_LOADED__ = true;
-
   window.__BIT_TNP_PROGRESS__ = "";
 
-  // ---------- Dashboard table extraction ----------
+  function setProgress(msg) {
+    window.__BIT_TNP_PROGRESS__ = msg;
+  }
+
+  // ---------- Dashboard ----------
   function extractDashboardRows() {
     const tables = Array.from(document.querySelectorAll("table"));
-    // Pick the table whose headers include "Company" and "Action" (or similar).
     let chosen = null;
     for (const t of tables) {
       const headers = Array.from(t.querySelectorAll("th, thead td"))
         .map((c) => (c.innerText || "").toLowerCase().trim());
-      const hasCompany = headers.some((h) => /company|organi/.test(h));
-      const hasAction = headers.some((h) => /action/.test(h));
-      if (hasCompany && hasAction) {
+      if (headers.some((h) => /company|organi/.test(h)) && headers.some((h) => /action/.test(h))) {
         chosen = t;
         break;
       }
@@ -38,7 +40,6 @@
         const deadline = cells[1] ? (cells[1].innerText || "").trim() : "";
         const postedOn = cells[2] ? (cells[2].innerText || "").trim() : "";
 
-        // Collect all links from any cell, classify by href.
         let viewApplyUrl = null;
         let updatesUrl = null;
         for (const cell of cells) {
@@ -56,28 +57,29 @@
       .filter(Boolean);
   }
 
-  // ---------- Detail page parsing ----------
-  const FIELD_MAP = [
-    ["designation", /designation|position|role/],
-    ["jobDescription", /job ?description|description/],
-    ["placeOfPosting", /place ?of ?posting|location|posting/],
-    ["cgpa", /cgpa|gpa|cut.?off|minimum ?cgpa/],
-    ["branches", /branch|department|stream|course|eligibility/],
-    ["ctc", /ctc|package|compensation|total ?pay/],
-    ["basePay", /base ?pay|base ?salary|fixed|in ?hand/],
-    ["selected", /selected|final ?result|placed|offer/],
-    ["dated", /^dated$|posted ?by/],
-    ["registrationEnds", /ends ?on|registration|last ?date/],
+  // ---------- Section text mining ----------
+  const SECTIONS_AFTER = [
+    "REGISTRATION", "JOB PROFILE DETAILS", "STIPEND DETAILS",
+    "SALARY DETAILS", "CTC DETAILS", "REMUNERATION", "SELECTION PROCESS",
+    "ELIGIBILITY", "CAMPUSES CONSIDERED", "COMPANY DETAILS", "Note:",
   ];
 
-  function classifyLabel(text) {
-    const t = (text || "").toLowerCase().trim();
-    for (const [field, re] of FIELD_MAP) {
-      if (re.test(t)) return field;
+  function getSection(text, start) {
+    const upper = text.toUpperCase();
+    const startUpper = start.toUpperCase();
+    const i = upper.indexOf(startUpper);
+    if (i === -1) return "";
+    const after = i + startUpper.length;
+    let end = text.length;
+    for (const next of SECTIONS_AFTER) {
+      if (next.toUpperCase() === startUpper) continue;
+      const j = upper.indexOf(next.toUpperCase(), after);
+      if (j !== -1 && j < end) end = j;
     }
-    return null;
+    return text.slice(after, end).trim();
   }
 
+  // ---------- Detail page parsing ----------
   function parseDetailPage(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const data = {
@@ -85,115 +87,227 @@
       designation: "",
       jobDescription: "",
       placeOfPosting: "",
-      cgpa: "",
-      branches: "",
-      ctc: "",
-      basePay: "",
       stipendUG: "",
       stipendPG: "",
-      otherBenefits: "",
+      basePay: "",
+      ctc: "",
+      courses: "",
+      criteriaUG: "",
+      criteriaPG: "",
+      companyURL: "",
+      yearOfEstablishment: "",
     };
 
-    // Strategy 1: <tr> with label/value cells.
+    // Strategy 1: tabular label/value rows
     doc.querySelectorAll("tr").forEach((tr) => {
       const cells = Array.from(tr.querySelectorAll("td, th"));
       if (cells.length < 2) return;
-      const labelText = (cells[0].innerText || "").trim();
-      const valueText = cells
-        .slice(1)
-        .map((c) => (c.innerText || "").trim())
-        .join(" | ");
-      const field = classifyLabel(labelText);
-      if (field && !data[field]) data[field] = valueText;
+      const label = (cells[0].innerText || "").toLowerCase().trim();
+      const value = cells.slice(1).map((c) => (c.innerText || "").trim()).filter(Boolean).join(" | ");
+      if (!value) return;
+
+      if (/job ?designation|^designation$/.test(label)) data.designation ||= value;
+      else if (/^job ?description$|^description$/.test(label)) data.jobDescription ||= value;
+      else if (/place ?of ?posting|^location$/.test(label)) data.placeOfPosting ||= value;
+      else if (/^url$/.test(label)) data.companyURL ||= value;
+      else if (/year ?of ?establishment/.test(label)) data.yearOfEstablishment ||= value;
     });
 
-    // Strategy 2: body-text patterns for stipend.
-    const bodyText = doc.body ? doc.body.innerText : "";
+    // Strategy 2: section-based text mining
+    const bodyText = (doc.body?.innerText || "").replace(/\r/g, "");
 
-    const ugMatch = bodyText.match(/For\s+UG\s*₹?\s*([\d,]+)/i);
-    if (ugMatch) data.stipendUG = ugMatch[1].replace(/,/g, "");
-    const pgMatch = bodyText.match(/For\s+PG\s*₹?\s*([\d,]+)/i);
-    if (pgMatch) data.stipendPG = pgMatch[1].replace(/,/g, "");
+    // Type — first non-empty line of JOB PROFILE DETAILS
+    const jpd = getSection(bodyText, "JOB PROFILE DETAILS");
+    if (jpd) {
+      const firstLine = jpd.split("\n").map((s) => s.trim()).find(Boolean);
+      if (firstLine && firstLine.length < 60) data.type = firstLine;
+    }
 
-    // CTC fallback patterns: "CTC: 12 LPA" anywhere
+    // Stipend
+    const stipend = getSection(bodyText, "STIPEND DETAILS");
+    if (stipend) {
+      const ug = stipend.match(/For\s+UG\s*₹?\s*([\d,]+)/i);
+      const pg = stipend.match(/For\s+PG\s*₹?\s*([\d,]+)/i);
+      if (ug) data.stipendUG = ug[1].replace(/,/g, "");
+      if (pg) data.stipendPG = pg[1].replace(/,/g, "");
+    }
+
+    // Salary / CTC
+    const salary = getSection(bodyText, "SALARY DETAILS") ||
+      getSection(bodyText, "CTC DETAILS") ||
+      getSection(bodyText, "REMUNERATION");
+    const salaryText = salary || bodyText;
     if (!data.ctc) {
-      const ctcMatch = bodyText.match(/CTC[:\s]+([₹\d.,\s]+(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (ctcMatch) data.ctc = ctcMatch[1].trim();
+      const ctcM = salaryText.match(/(?:CTC|Total\s*Pay|Package)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
+      if (ctcM) data.ctc = ctcM[1].trim().replace(/\s+/g, " ");
     }
     if (!data.basePay) {
-      const bpMatch = bodyText.match(/(?:Base ?Pay|Base ?Salary|Fixed)[:\s]+([₹\d.,\s]+(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (bpMatch) data.basePay = bpMatch[1].trim();
+      const bpM = salaryText.match(/(?:Base\s*Pay|Base\s*Salary|Fixed\s*Pay)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
+      if (bpM) data.basePay = bpM[1].trim().replace(/\s+/g, " ");
     }
 
-    // CGPA pattern: "CGPA: 7.0" or "Minimum CGPA 6.5"
-    if (!data.cgpa) {
-      const cgMatch = bodyText.match(/(?:minimum\s+)?CGPA[:\s]+([\d.]+)/i);
-      if (cgMatch) data.cgpa = cgMatch[1];
-    }
-
-    // Type detection
-    if (/six\s*months?\s*internship|internship/i.test(bodyText)) data.type = "Internship";
-    if (/full[\s-]?time/i.test(bodyText)) {
-      data.type = data.type ? data.type + " / Full-Time" : "Full-Time";
+    // Eligibility — Courses + Criteria
+    const elig = getSection(bodyText, "ELIGIBILITY");
+    if (elig) {
+      const coursesM = elig.match(/Courses\s*:?\s*([\s\S]*?)(?=Criteria|$)/i);
+      if (coursesM) {
+        const parts = coursesM[1]
+          .split(/[\n,]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        data.courses = Array.from(new Set(parts)).join(", ");
+      }
+      const ugM = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
+      const pgM = elig.match(/(?:^|\n)\s*PG\s*[-:]\s*([^\n]*)/i);
+      if (ugM) data.criteriaUG = ugM[1].trim();
+      if (pgM) data.criteriaPG = pgM[1].trim();
     }
 
     return data;
   }
 
-  // ---------- Crawler with concurrency limit ----------
-  async function fetchWithLimit(urls, concurrency) {
-    const results = new Array(urls.length);
-    let nextIndex = 0;
-    let completed = 0;
+  // ---------- Notice page → result links ----------
+  function extractResultLinks(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const links = [];
+    doc.querySelectorAll('a[href*="/resultlist/"]').forEach((a) => {
+      const href = a.getAttribute("href");
+      if (!href) return;
+      // Use parent context to get a richer label.
+      const ownText = (a.innerText || "").trim();
+      const parentText = ((a.parentElement?.innerText) || "").trim();
+      links.push({
+        url: new URL(href, location.origin).href,
+        label: ownText || parentText,
+      });
+    });
+    return links;
+  }
 
-    async function worker() {
-      while (nextIndex < urls.length) {
-        const i = nextIndex++;
-        if (!urls[i]) {
-          results[i] = null;
-        } else {
-          try {
-            const res = await fetch(urls[i], { credentials: "same-origin" });
-            results[i] = res.ok ? await res.text() : null;
-          } catch {
-            results[i] = null;
-          }
-        }
-        completed++;
-        window.__BIT_TNP_PROGRESS__ = `Fetched ${completed}/${urls.length} detail pages`;
+  function pickFinalLink(links) {
+    if (!links.length) return null;
+    const finalOne = links.find((l) => /final/i.test(l.label));
+    if (finalOne) return finalOne;
+    const hrOne = links.find((l) => /\bhr\b/i.test(l.label));
+    if (hrOne) return hrOne;
+    return links[links.length - 1];
+  }
+
+  // ---------- Result page parsing ----------
+  function parseResultPage(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const tables = Array.from(doc.querySelectorAll("table"));
+    let target = null;
+    for (const t of tables) {
+      const header = (t.innerText || "").toLowerCase().slice(0, 300);
+      if (/roll\s*no/.test(header) && /branch/.test(header)) {
+        target = t;
+        break;
       }
     }
+    if (!target) return [];
 
-    const workers = Array.from(
-      { length: Math.min(concurrency, urls.length) },
-      worker
-    );
-    await Promise.all(workers);
+    // Map header positions to columns.
+    const headerRow = target.querySelector("thead tr") || target.querySelector("tr");
+    if (!headerRow) return [];
+    const headerCells = Array.from(headerRow.querySelectorAll("th, td"))
+      .map((c) => (c.innerText || "").toLowerCase().trim());
+    const colOf = (re) => headerCells.findIndex((h) => re.test(h));
+    const idx = {
+      roll: colOf(/roll/),
+      name: colOf(/name/),
+      degree: colOf(/degree/),
+      branch: colOf(/branch/),
+      centre: colOf(/centre|center|campus/),
+    };
+
+    const dataRows = target.querySelectorAll("tbody tr").length
+      ? Array.from(target.querySelectorAll("tbody tr"))
+      : Array.from(target.querySelectorAll("tr")).slice(1);
+
+    return dataRows
+      .map((tr) => {
+        const cells = Array.from(tr.querySelectorAll("td")).map((c) => (c.innerText || "").trim());
+        if (cells.length < 3) return null;
+        return {
+          rollNo: idx.roll >= 0 ? cells[idx.roll] : "",
+          name: idx.name >= 0 ? cells[idx.name] : "",
+          degree: idx.degree >= 0 ? cells[idx.degree] : "",
+          branch: idx.branch >= 0 ? cells[idx.branch] : "",
+          centre: idx.centre >= 0 ? cells[idx.centre] : "",
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function aggregateSelected(candidates) {
+    if (!candidates.length) return { list: "", count: 0, byBranch: "" };
+    const list = candidates
+      .map((c) => `${c.name} (${[c.degree, c.branch].filter(Boolean).join(" / ")})`)
+      .join("; ");
+    const tally = {};
+    candidates.forEach((c) => {
+      const key = c.branch || "Unknown";
+      tally[key] = (tally[key] || 0) + 1;
+    });
+    const byBranch = Object.entries(tally).map(([b, n]) => `${b}: ${n}`).join(", ");
+    return { list, count: candidates.length, byBranch };
+  }
+
+  // ---------- Fetch helpers ----------
+  async function fetchHTML(url) {
+    if (!url) return null;
+    try {
+      const res = await fetch(url, { credentials: "same-origin" });
+      return res.ok ? await res.text() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function withLimit(items, limit, worker, label) {
+    const results = new Array(items.length);
+    let idx = 0;
+    let done = 0;
+    const total = items.length;
+    async function loop() {
+      while (idx < total) {
+        const i = idx++;
+        try {
+          results[i] = await worker(items[i], i);
+        } catch {
+          results[i] = null;
+        }
+        done++;
+        if (label) setProgress(`${label}: ${done}/${total}`);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, total || 1) }, loop));
     return results;
   }
 
   // ---------- Branch filter ----------
   const BRANCH_PATTERNS = {
-    CSE: [/\bcse\b/i, /computer ?science(?: ?& ?engineering)?/i, /\bcs\b/i],
-    AIML: [/aiml/i, /ai ?[&/-] ?ml/i, /ai ?and ?ml/i, /artificial ?intelligence/i, /machine ?learning/i],
-    ECE: [/\bece\b/i, /electronics ?(?:& ?communication|and ?communication)?/i, /e ?[&/-] ?c/i],
+    CSE: [/computer\s*science/i, /\bcse\b/i, /information\s*technology/i, /\bit\b(?!\w)/i],
+    AIML: [
+      /ai\s*&?\s*ml/i, /ai\s*and\s*ml/i, /aiml/i,
+      /artificial\s*intelligence/i, /machine\s*learning/i,
+      /\bmath(?:ematics)?\s*(?:&|and)\s*computing\b/i, /\bm&c\b/i,
+    ],
+    ECE: [
+      /electronics(?:\s*(?:&|and)\s*communication)?/i, /\bece\b/i,
+      /electronics\s*engineering/i, /\bvlsi\b/i,
+    ],
   };
 
-  function isBranchEligible(detail, enabled) {
+  function isBranchEligible(row, enabled) {
     const list = Object.entries(enabled).filter(([, v]) => v).map(([k]) => k);
     if (list.length === 0) return true;
-    const haystack = [
-      detail.branches || "",
-      detail.designation || "",
-      detail.jobDescription || "",
-    ].join(" ");
-    // If the detail page didn't expose a branches field at all, keep the row
-    // (false negatives are worse than false positives — user can filter the CSV).
-    if (!detail.branches || !detail.branches.trim()) return true;
-    return list.some((b) => BRANCH_PATTERNS[b].some((re) => re.test(haystack)));
+    if (!row.courses || !row.courses.trim()) return true; // unknown — keep
+    return list.some((b) => BRANCH_PATTERNS[b].some((re) => re.test(row.courses)));
   }
 
-  // ---------- Compensation parsing ----------
+  // ---------- Compensation ----------
   function parseRupees(s) {
     if (!s) return Infinity;
     const t = String(s).toLowerCase().replace(/,/g, "").replace(/₹/g, "").trim();
@@ -212,7 +326,10 @@
   function compensationValue(row) {
     if (row.ctc) return parseRupees(row.ctc);
     if (row.basePay) return parseRupees(row.basePay);
-    if (row.stipendUG) return parseFloat(row.stipendUG) * 12; // annualize stipend
+    if (row.stipendUG) {
+      const n = parseFloat(row.stipendUG);
+      if (!isNaN(n)) return n * 12; // annualise
+    }
     return Infinity;
   }
 
@@ -223,17 +340,21 @@
     ["Designation", "designation"],
     ["Job Description", "jobDescription"],
     ["Place of Posting", "placeOfPosting"],
-    ["CGPA Cutoff", "cgpa"],
-    ["Branches Allowed", "branches"],
-    ["Stipend UG (₹/month)", "stipendUG"],
-    ["Stipend PG (₹/month)", "stipendPG"],
+    ["Eligible Courses", "courses"],
+    ["UG Criteria", "criteriaUG"],
+    ["PG Criteria", "criteriaPG"],
+    ["Stipend UG (₹/mo)", "stipendUG"],
+    ["Stipend PG (₹/mo)", "stipendPG"],
     ["Base Pay", "basePay"],
     ["CTC", "ctc"],
-    ["Selected (final HR)", "selected"],
+    ["Final Selected (count)", "selectedCount"],
+    ["Final Selected (by branch)", "selectedByBranch"],
+    ["Final Selected (names)", "selectedList"],
     ["Deadline", "deadline"],
     ["Posted On", "postedOn"],
-    ["Detail URL", "viewApplyUrl"],
-    ["Updates URL", "updatesUrl"],
+    ["Company URL", "companyURL"],
+    ["Detail Page", "viewApplyUrl"],
+    ["Updates Page", "updatesUrl"],
   ];
 
   function csvEscape(s) {
@@ -246,59 +367,87 @@
   function toCSV(rows) {
     const lines = [COLUMNS.map(([h]) => csvEscape(h)).join(",")];
     for (const r of rows) {
-      lines.push(COLUMNS.map(([, k]) => csvEscape(r[k] || "")).join(","));
+      lines.push(COLUMNS.map(([, k]) => csvEscape(r[k] ?? "")).join(","));
     }
     return lines.join("\n");
   }
 
-  // ---------- Public API ----------
+  // ---------- Main entry ----------
   window.__BIT_TNP_SCRAPE__ = async function (options) {
-    window.__BIT_TNP_PROGRESS__ = "Reading dashboard table...";
-    const dashboardRows = extractDashboardRows();
-    if (dashboardRows.length === 0) {
-      return {
-        error: "No dashboard table found. Make sure you are on the Recent Jobs page.",
-        rawCount: 0,
-      };
+    setProgress("Reading dashboard table...");
+    const rows = extractDashboardRows();
+    if (!rows.length) {
+      return { error: "No dashboard table found. Make sure you are on the Recent Jobs page.", rawCount: 0 };
     }
 
-    window.__BIT_TNP_PROGRESS__ = `Found ${dashboardRows.length} companies. Fetching detail pages...`;
-    const urls = dashboardRows.map((r) => r.viewApplyUrl);
-    const htmls = await fetchWithLimit(urls, 5);
+    setProgress(`Found ${rows.length} companies. Fetching detail pages...`);
+    const detailHTMLs = await withLimit(
+      rows.map((r) => r.viewApplyUrl),
+      5,
+      fetchHTML,
+      "Detail pages"
+    );
 
-    const merged = dashboardRows.map((row, i) => {
-      const detail = htmls[i] ? parseDetailPage(htmls[i]) : {};
-      return { ...row, ...detail };
+    const merged = rows.map((row, i) => {
+      const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
+      return { ...row, ...det };
     });
 
-    const filtered = merged.filter((r) => isBranchEligible(r, options.branches));
+    const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
-    const sorted = filtered
+    if (options.fetchResults) {
+      setProgress(`Fetching notice pages for ${branchFiltered.length} companies...`);
+      const noticeHTMLs = await withLimit(
+        branchFiltered.map((r) => r.updatesUrl),
+        4,
+        fetchHTML,
+        "Notice pages"
+      );
+
+      // Pick the final result link per company (one per company keeps it tractable).
+      const finalResultURLs = noticeHTMLs.map((html) => {
+        if (!html) return null;
+        const links = extractResultLinks(html);
+        return pickFinalLink(links)?.url || null;
+      });
+
+      setProgress(`Fetching final-round result pages...`);
+      const resultHTMLs = await withLimit(finalResultURLs, 4, fetchHTML, "Result pages");
+
+      branchFiltered.forEach((row, i) => {
+        const html = resultHTMLs[i];
+        if (!html) {
+          row.selectedCount = 0;
+          row.selectedByBranch = "";
+          row.selectedList = "";
+          return;
+        }
+        const cands = parseResultPage(html);
+        const agg = aggregateSelected(cands);
+        row.selectedCount = agg.count;
+        row.selectedByBranch = agg.byBranch;
+        row.selectedList = agg.list;
+      });
+    }
+
+    const sorted = branchFiltered
       .map((r) => ({ ...r, _comp: compensationValue(r) }))
       .sort((a, b) => a._comp - b._comp);
 
-    window.__BIT_TNP_PROGRESS__ = `Done. ${sorted.length} rows in output.`;
-
+    setProgress(`Done. ${sorted.length} rows in CSV.`);
     return {
-      rawCount: dashboardRows.length,
-      detailFetched: htmls.filter(Boolean).length,
-      afterBranch: filtered.length,
+      rawCount: rows.length,
+      detailFetched: detailHTMLs.filter(Boolean).length,
+      afterBranch: branchFiltered.length,
       csv: toCSV(sorted),
     };
   };
 
   window.__BIT_TNP_INSPECT__ = function () {
     const rows = extractDashboardRows();
-    const lines = [];
-    lines.push(`Dashboard rows found: ${rows.length}`);
+    const lines = [`Dashboard rows: ${rows.length}`];
     if (rows.length > 0) {
-      lines.push("");
-      lines.push("First row sample:");
-      lines.push(JSON.stringify(rows[0], null, 2));
-      if (rows.length > 1) {
-        lines.push("");
-        lines.push(`(+ ${rows.length - 1} more rows)`);
-      }
+      lines.push("", "First row:", JSON.stringify(rows[0], null, 2));
     }
     return lines.join("\n");
   };

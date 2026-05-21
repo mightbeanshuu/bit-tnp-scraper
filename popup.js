@@ -27,6 +27,7 @@ function buildOptions() {
       AIML: document.getElementById("branchAIML").checked,
       ECE: document.getElementById("branchECE").checked,
     },
+    fetchResults: document.getElementById("fetchResults").checked,
   };
 }
 

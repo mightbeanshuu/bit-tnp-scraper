@@ -50,17 +50,22 @@ The portal's DOM may use slightly different column labels than the defaults. If 
 
 ## How it works
 
-- `content.js` reads the dashboard table on `tp.bitmesra.co.in`, extracts each company row plus its `/job/info/<hash>` detail URL.
-- It then fetches each detail page in parallel (5 at a time, same-origin, with the user's session cookies) and parses labelled fields: Job Designation, Job Description, Place of Posting, Stipend UG/PG, CGPA cutoff, Branches Allowed, CTC, Base Pay.
-- Rows are filtered by the selected branches (CSE / AIML / ECE — OR logic) and sorted ascending by compensation (CTC if present, else base pay, else annualised UG stipend).
-- `popup.js` injects the content script, polls progress, and triggers a CSV download via `chrome.downloads`.
-- No data leaves the browser. Nothing is sent to any external server.
+Three-stage crawl, all client-side, all using your existing logged-in session cookies.
+
+1. **Dashboard scrape** — reads the Recent Jobs table on `tp.bitmesra.co.in` and extracts each company row, its `/job/info/<hash>` (View & Apply) URL, and its `/job/notice/<hash>` (Updates) URL.
+2. **Detail page crawl** — fetches each `/job/info/<hash>` (5 in parallel) and parses the labelled sections: JOB PROFILE DETAILS (Designation, Description, Place of Posting), STIPEND DETAILS (UG/PG), SALARY/CTC DETAILS (CTC, Base Pay), ELIGIBILITY (Courses, UG/PG Criteria), COMPANY DETAILS (URL, Year of Establishment).
+3. **Result crawl** — for each company that passes the branch filter, fetches the notice page, finds the `/resultlist/<id>/<hash>` link labelled "Final" (or HR-round equivalent), fetches it, and parses the Selected Candidates table into a name/branch list plus a per-branch tally.
+
+Rows are then filtered by the selected branches (CSE / AIML / ECE — OR logic against the `Eligible Courses` pills) and sorted ascending by compensation (CTC if present, else base pay, else annualised UG stipend).
+
+No data leaves the browser. Nothing is sent to any external server.
 
 ## Limitations and caveats
 
-- The "Selected in final HR" column comes from the per-company **Updates** page (`/job/notice/<hash>`) which has a separate structure. The current build does not crawl those yet.
 - The year filter is handled by the portal's own "Placement Year" dropdown — set it to `2025-26` before scraping.
 - The dashboard's "Show N entries" pagination is honoured as-is. Set it to a high number (e.g. 100) before scraping if there are more than 25 listings.
+- "Final-round selected candidates" picks the result link whose label contains `Final` (preferred) or `HR`, falling back to the most recent result link. If a company has multiple final rounds (e.g. separate Mechanical / MBA tracks), only one is captured per company by design — uncheck "Include final-round selected candidates" to skip results entirely and run faster.
+- Compensation parsing handles `LPA`, `Lakh`, `Cr`, plain rupees, and per-month stipends (annualised by ×12). Unusual formats may fall back to `Infinity` and sort to the bottom.
 
 ## Project layout
 
