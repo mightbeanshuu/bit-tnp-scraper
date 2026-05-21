@@ -188,21 +188,38 @@
     return delimited.split("").map((s) => s.trim()).filter(Boolean);
   }
 
+  // Validate CGPA value is in the plausible range (4.0–10.0).
+  function validCGPA(s) {
+    const n = parseFloat(s);
+    if (isNaN(n) || n < 4.0 || n > 10.0) return null;
+    return n.toFixed(2);
+  }
+
   // Parse criteria text into circuital / non-circuital CGPAs.
+  // STRICT: requires an explicit circuital/non-circuital keyword OR a
+  // CGPA/GPA keyword adjacent to the number. Never harvests random body
+  // numbers (which was the bug that produced '10.00 / 10.00').
   function parseCGPA(text) {
-    if (!text) return null;
-    const circ = text.match(/non[\s\-]?circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
-    const ncirc = circ; // placeholder so eslint doesn't complain; we'll redo
-    const nonCircM = text.match(/non[\s\-]?circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
-    const circM = text.match(/(?:^|[^a-z])circuital[^a-z]*?(\d+(?:\.\d+)?)/i);
+    if (!text || text.length > 800) return null;
+    const nonCircM = text.match(/non[\s\-]?circuital[^a-z\d]{0,30}(\d+(?:\.\d+)?)/i);
+    const circM = text.match(/(?:^|[^a-z])circuital[^a-z\d]{0,30}(\d+(?:\.\d+)?)/i);
     if (circM || nonCircM) {
-      return {
-        circuital: circM?.[1] || null,
-        nonCircuital: nonCircM?.[1] || null,
-      };
+      const circ = circM ? validCGPA(circM[1]) : null;
+      const nonCirc = nonCircM ? validCGPA(nonCircM[1]) : null;
+      if (circ || nonCirc) return { circuital: circ, nonCircuital: nonCirc };
     }
-    const single = text.match(/(\d+(?:\.\d+)?)/);
-    if (single) return { both: single[1] };
+    // Single CGPA — must have CGPA/GPA keyword nearby (before).
+    const kwBefore = text.match(/(?:min(?:imum)?\s*)?(?:CGPA|GPA|aggregate)[^\d]{0,20}(\d+(?:\.\d+)?)/i);
+    if (kwBefore) {
+      const v = validCGPA(kwBefore[1]);
+      if (v) return { both: v };
+    }
+    // ...or right after ("7.0 CGPA")
+    const kwAfter = text.match(/(\d+(?:\.\d+)?)\s*(?:CGPA|GPA)/i);
+    if (kwAfter) {
+      const v = validCGPA(kwAfter[1]);
+      if (v) return { both: v };
+    }
     return null;
   }
 
@@ -288,7 +305,9 @@
     }
 
     // Parse circuital vs non-circuital CGPA from the criteria text.
-    const cgInfo = parseCGPA(data.criteriaUG || elig || bodyText);
+    // ONLY parse CGPA from criteriaUG or the eligibility section — never the
+    // whole body (that's how we ended up with '10' from random page text).
+    const cgInfo = parseCGPA(data.criteriaUG || elig);
     if (cgInfo) {
       if (cgInfo.both) {
         data.cgpaCirc = cgInfo.both;
@@ -317,23 +336,59 @@
   }
 
   // ---------- Notice → result link discovery ----------
+  // Permissive extractor: returns every <a> whose href OR text could point
+  // to a results page. Covers /resultlist/, /result/, /selection/, and any
+  // anchor whose visible text mentions Final / HR Round / Result / Selected.
   function extractResultLinks(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    return Array.from(doc.querySelectorAll('a[href*="/resultlist/"]'))
-      .map((a) => ({
-        url: new URL(a.getAttribute("href"), location.origin).href,
-        label: ((a.innerText || "").trim() ||
-                (a.parentElement?.innerText || "").trim() || "").slice(0, 200),
-      }));
+    const out = [];
+    const seen = new Set();
+
+    const collect = (a, source) => {
+      const href = a.getAttribute("href");
+      if (!href || href === "#" || href.startsWith("javascript:")) return;
+      let abs;
+      try { abs = new URL(href, location.origin).href; } catch { return; }
+      if (seen.has(abs)) return;
+      seen.add(abs);
+      const text = (a.textContent || "").trim().slice(0, 200);
+      const parentText = (a.parentElement?.textContent || "").trim().slice(0, 200);
+      out.push({ url: abs, label: text || parentText, source });
+    };
+
+    // 1) Direct path matches.
+    doc.querySelectorAll('a[href*="/resultlist/"], a[href*="/result/"], a[href*="/selection/"]')
+      .forEach((a) => collect(a, "path"));
+
+    // 2) Text-based: any anchor where the label talks about results.
+    doc.querySelectorAll("a[href]").forEach((a) => {
+      const t = (a.textContent || "").trim();
+      if (/\b(final|hr\s*round|result|selected|selects|placed|offer|shortlist)\b/i.test(t)) {
+        collect(a, "text");
+      }
+    });
+
+    return out;
   }
 
   function pickFinalLink(links) {
     if (!links.length) return null;
+    // Prefer explicit /resultlist/ first — those are the canonical result pages.
+    const resultlist = links.find((l) => /\/resultlist\//i.test(l.url));
+    if (resultlist) return resultlist;
     return (
       links.find((l) => /final/i.test(l.label)) ||
       links.find((l) => /\bhr\b/i.test(l.label)) ||
+      links.find((l) => /\b(selected|result)\b/i.test(l.label)) ||
       links[links.length - 1]
     );
+  }
+
+  // Some companies announce selects INLINE on the notice page (no separate
+  // /resultlist/ page exists). Scan the notice HTML for any candidate table.
+  function parseInlineCandidates(html) {
+    if (!html) return [];
+    return parseResultPage(html);
   }
 
   // ---------- Result page parsing ----------
@@ -638,28 +693,37 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
     if (options.fetchResults) {
-      // We already have noticeHTMLs (parallel-fetched above). Pick the final
-      // result link for each branch-filtered row using its original index.
+      // Two-pass result resolution per company:
+      //   Pass A: pick the most likely result link from notice page and fetch.
+      //   Pass B: if A returned no candidates, scan the notice page itself
+      //           for an inline Roll No / Branch table (some companies
+      //           publish results directly in the notification panel).
       const finalUrls = branchFiltered.map((row) => {
         const html = noticeHTMLs[row._origIdx];
         if (!html) return null;
-        return pickFinalLink(extractResultLinks(html))?.url || null;
+        const links = extractResultLinks(html);
+        return pickFinalLink(links)?.url || null;
       });
 
-      setProgress(`Fetching ${finalUrls.filter(Boolean).length} final-round result pages...`);
+      setProgress(`Fetching ${finalUrls.filter(Boolean).length} result pages...`);
       const resultHTMLs = await withLimit(finalUrls, 8, fetchHTML, "Results");
 
       branchFiltered.forEach((row, i) => {
-        if (!resultHTMLs[i]) {
-          row.selectedCount = 0; row.selectedByBranch = ""; row.selectedList = "";
-          return;
+        let cands = [];
+        if (resultHTMLs[i]) cands = parseResultPage(resultHTMLs[i]);
+        if (cands.length === 0) {
+          // Inline fallback — look for candidate table on the notice page itself.
+          const noticeHtml = noticeHTMLs[row._origIdx];
+          if (noticeHtml) cands = parseInlineCandidates(noticeHtml);
         }
-        const cands = parseResultPage(resultHTMLs[i]);
         const agg = aggregateSelected(cands);
         row.selectedCount = agg.count;
         row.selectedByBranch = agg.byBranch;
         row.selectedList = agg.list;
       });
+
+      const withResults = branchFiltered.filter((r) => r.selectedCount > 0).length;
+      setProgress(`Final results found for ${withResults} of ${branchFiltered.length} companies.`);
     }
     branchFiltered.forEach((r) => delete r._origIdx);
 
