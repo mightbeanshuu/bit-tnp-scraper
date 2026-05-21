@@ -97,6 +97,23 @@ document.getElementById("settingsBtn").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
+document.getElementById("viewerBtn").addEventListener("click", async () => {
+  const url = chrome.runtime.getURL("viewer.html");
+  await chrome.tabs.create({ url });
+});
+
+(async () => {
+  const { lastScrape } = await chrome.storage.local.get("lastScrape");
+  const btn = document.getElementById("viewerBtn");
+  if (lastScrape?.rows?.length) {
+    btn.textContent = `Open Viewer (${lastScrape.rows.length} companies) ↗`;
+  } else {
+    btn.textContent = "Open Viewer (no data yet)";
+    btn.disabled = true;
+    btn.style.opacity = "0.55";
+  }
+})();
+
 // ---------- CSV ----------
 function csvEscape(s) {
   if (s == null) return "";
@@ -382,6 +399,25 @@ scrapeBtn.addEventListener("click", async () => {
     rows = filterByCTCRange(rows, opts.minCTC, opts.maxCTC);
     if (opts.minCTC != null || opts.maxCTC != null) {
       log(`CTC range filter: ${beforeRange} → ${rows.length} (min=${opts.minCTC ?? "any"} LPA, max=${opts.maxCTC ?? "any"} LPA)`);
+    }
+
+    // Persist for the Viewer page.
+    try {
+      await chrome.storage.local.set({
+        lastScrape: {
+          timestamp: stamp,
+          rows,
+          options: { branches: opts.branches },
+          stats: {
+            rawCount: result.rawCount,
+            detailFetched: result.detailFetched,
+            afterBranch: result.afterBranch,
+          },
+        },
+      });
+      log(`Saved ${rows.length} rows for the Viewer.`);
+    } catch (e) {
+      log("Could not persist for Viewer: " + e.message);
     }
     if (opts.format === "csv") {
       const blob = new Blob([toCSV(rows)], { type: "text/csv" });

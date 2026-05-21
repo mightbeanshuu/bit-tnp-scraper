@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>BIT TNP Viewer</title>
+  <style>
+    :root {
+      --grad: linear-gradient(135deg, #5a1eb4 0%, #f03c82 55%, #ffb432 100%);
+      --grad-text: linear-gradient(90deg, #5a1eb4, #f03c82, #ffb432);
+      --bg: #faf9fc;
+      --card: #ffffff;
+      --border: #ece9f3;
+      --text: #1a1a23;
+      --muted: #6c6a78;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header {
+      padding: 22px 28px 16px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 10;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+    }
+    h1 {
+      margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;
+      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      display: inline-block;
+    }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+    .controls {
+      display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; align-items: center;
+    }
+    .controls input[type=text], .controls select {
+      padding: 8px 12px; font-size: 13px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--card); outline: none;
+    }
+    .controls input[type=text] { min-width: 240px; }
+    .controls input[type=text]:focus, .controls select:focus { border-color: #5a1eb4; }
+    .pill {
+      background: var(--grad); color: white; padding: 4px 10px;
+      border-radius: 999px; font-size: 11px; font-weight: 600;
+    }
+
+    .slider-wrap {
+      margin-top: 14px;
+      padding: 14px 16px;
+      background: linear-gradient(135deg, rgba(90,30,180,0.04), rgba(240,60,130,0.04));
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .slider-label {
+      display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 8px;
+    }
+    .slider-label .value { font-weight: 700; color: var(--text); font-size: 13px; }
+
+    .dual {
+      position: relative; height: 30px;
+    }
+    .dual .track {
+      position: absolute; top: 13px; left: 0; right: 0; height: 4px;
+      background: #ece9f3; border-radius: 2px;
+    }
+    .dual .active {
+      position: absolute; top: 13px; height: 4px;
+      background: var(--grad); border-radius: 2px;
+    }
+    .dual input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      position: absolute; width: 100%; height: 30px;
+      background: transparent; pointer-events: none; margin: 0;
+    }
+    .dual input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; pointer-events: all;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--grad); border: 3px solid white;
+      box-shadow: 0 2px 8px rgba(90,30,180,0.4);
+      cursor: grab;
+    }
+    .dual input[type=range]::-webkit-slider-thumb:active { cursor: grabbing; }
+    .dual input[type=range]::-moz-range-thumb {
+      pointer-events: all; width: 22px; height: 22px; border-radius: 50%;
+      background: #5a1eb4; border: 3px solid white;
+      box-shadow: 0 2px 8px rgba(90,30,180,0.4); cursor: grab;
+    }
+
+    main { padding: 20px 28px 80px; max-width: 1200px; margin: 0 auto; }
+
+    .empty { text-align: center; padding: 80px 20px; color: var(--muted); }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px 18px; margin-bottom: 12px;
+      cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+      position: relative;
+    }
+    .card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(90,30,180,0.08); border-color: #d8d3e6; }
+    .card.expanded { border-color: #5a1eb4; box-shadow: 0 6px 20px rgba(90,30,180,0.12); }
+
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+    .card-head .name { font-size: 16px; font-weight: 700; }
+    .card-head .pay {
+      font-size: 16px; font-weight: 800;
+      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      white-space: nowrap;
+    }
+    .card-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .badge {
+      font-size: 11px; padding: 3px 9px; border-radius: 999px;
+      background: #f1eef8; color: #5a1eb4; font-weight: 600;
+    }
+    .badge.type { background: #fff1f5; color: #c4365e; }
+    .badge.selected { background: #e6f4ea; color: #137333; }
+    .badge.cgpa { background: #fef7e0; color: #8a6d00; }
+
+    .summary { margin-top: 10px; font-size: 13px; color: #38383f; line-height: 1.5; }
+
+    .details {
+      margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border);
+      display: none;
+    }
+    .card.expanded .details { display: block; }
+    .details h4 {
+      margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
+      color: var(--muted); font-weight: 700;
+    }
+    .details .body { font-size: 13px; line-height: 1.55; color: #2a2a32; white-space: pre-wrap; }
+    .details a { color: #5a1eb4; text-decoration: none; font-weight: 600; }
+    .details a:hover { text-decoration: underline; }
+    .selected-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 4px 12px; font-size: 12px; color: #2a2a32;
+    }
+
+    .branch-tally {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .branch-tally .b {
+      background: #f1eef8; padding: 4px 10px; border-radius: 6px;
+      font-size: 11px; font-weight: 600; color: #5a1eb4;
+    }
+
+    .toggle-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BIT TNP Viewer</h1>
+    <div class="meta"><span id="stamp">Loading…</span> · <span id="counter">0 of 0</span></div>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Search company, role, location…" />
+      <select id="sort">
+        <option value="ctc-asc">Sort: CTC low → high</option>
+        <option value="ctc-desc">Sort: CTC high → low</option>
+        <option value="selected-desc">Sort: Most selected</option>
+        <option value="deadline">Sort: Deadline (soonest)</option>
+        <option value="company-asc">Sort: Company A → Z</option>
+      </select>
+      <span class="pill" id="branchPill">All branches</span>
+    </div>
+
+    <div class="slider-wrap">
+      <div class="slider-label">
+        <span>CTC range (annualised)</span>
+        <span class="value" id="rangeDisplay">—</span>
+      </div>
+      <div class="dual" id="dual">
+        <div class="track"></div>
+        <div class="active" id="active"></div>
+        <input type="range" id="minRange" min="0" max="100" value="0" step="0.5" />
+        <input type="range" id="maxRange" min="0" max="100" value="100" step="0.5" />
+      </div>
+    </div>
+  </header>
+
+  <main id="cards">
+    <div class="empty">Loading scrape data…</div>
+  </main>
+
+  <script src="viewer.js"></script>
+</body>
+</html>
