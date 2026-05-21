@@ -10,21 +10,20 @@ function escapeHtml(s) {
 }
 
 function compValue(r) {
-  if (typeof r._comp === "number" && isFinite(r._comp)) return r._comp;
-  // Recompute defensively if missing.
-  return parseFloat(r.ctc) ? NaN : 0;
+  return (typeof r.annualCTC === "number" && isFinite(r.annualCTC)) ? r.annualCTC : null;
 }
 
 function compInLPA(r) {
   const v = compValue(r);
-  if (!isFinite(v) || v <= 0) return null;
-  return v / 100000;
+  return v == null ? null : v / 100000;
 }
 
 function payDisplay(r) {
+  // Show the source format the company posted, with the computed annual in parens
+  // when source was a monthly stipend (so users can compare apples-to-apples).
   if (r.ctc) return r.ctc;
   if (r.basePay) return r.basePay;
-  if (r.stipendUG) return `₹${r.stipendUG}/mo`;
+  if (r.stipendUG) return `₹${r.stipendUG}/mo  ·  ${r.annualCTCDisplay || ""}`.trim();
   return "—";
 }
 
@@ -111,7 +110,12 @@ function applyFilters(rows) {
   const q = $("search").value.trim().toLowerCase();
   return rows.filter((r) => {
     const lpa = compInLPA(r);
-    if (lpa == null || lpa < min || lpa > max) return false;
+    // Keep unknown-pay rows when min is 0 (no lower bound).
+    if (lpa == null) {
+      if (min > 0) return false;
+    } else {
+      if (lpa < min || lpa > max) return false;
+    }
     if (q) {
       const hay = [
         r.company, r.designation, r.placeOfPosting,

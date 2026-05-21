@@ -15,6 +15,9 @@ const COLUMNS = [
   ["Stipend PG (₹/mo)", "stipendPG"],
   ["Base Pay", "basePay"],
   ["CTC", "ctc"],
+  ["Annual CTC (₹)", "annualCTC"],
+  ["Annual CTC (display)", "annualCTCDisplay"],
+  ["CTC Source", "compSource"],
   ["Final Selected (count)", "selectedCount"],
   ["Final Selected (by branch)", "selectedByBranch"],
   ["Final Selected (names)", "selectedList"],
@@ -73,8 +76,9 @@ function filterByCTCRange(rows, minLPA, maxLPA) {
   const minR = minLPA != null ? minLPA * 100000 : null;
   const maxR = maxLPA != null ? maxLPA * 100000 : null;
   return rows.filter((r) => {
-    const v = r._comp;
-    if (v == null || v === Infinity) return false;
+    const v = r.annualCTC;
+    // If no pay info, keep when no lower bound (user is permissive); drop when min > 0.
+    if (v == null) return minLPA == null || minLPA === 0;
     if (minR != null && v < minR) return false;
     if (maxR != null && v > maxR) return false;
     return true;

@@ -378,8 +378,11 @@
   }
 
   // ---------- Compensation ----------
-  function parseRupees(s) {
-    if (!s) return Infinity;
+  // parseAnnualPay handles CTC/basePay strings with units (LPA / Lakh / Cr).
+  // Bare numbers >= 100000 are assumed already-in-rupees; smaller bare numbers
+  // are assumed to be lakhs.
+  function parseAnnualPay(s) {
+    if (!s) return null;
     const t = String(s).toLowerCase().replace(/,/g, "").replace(/₹/g, "").trim();
     let m = t.match(/(\d+(?:\.\d+)?)\s*(lpa|lakh|lac|\bl\b)/);
     if (m) return parseFloat(m[1]) * 100000;
@@ -388,19 +391,32 @@
     m = t.match(/(\d+(?:\.\d+)?)/);
     if (m) {
       const n = parseFloat(m[1]);
+      if (isNaN(n) || n <= 0) return null;
       return n >= 100000 ? n : n * 100000;
     }
-    return Infinity;
+    return null;
   }
 
-  function compensationValue(row) {
-    if (row.ctc) return parseRupees(row.ctc);
-    if (row.basePay) return parseRupees(row.basePay);
-    if (row.stipendUG) {
-      const n = parseFloat(row.stipendUG);
-      if (!isNaN(n)) return n * 12;
-    }
-    return Infinity;
+  // parseStipendMonthly handles bare monthly-stipend strings like "8000", "8,000".
+  // Always returns rupees per month; never inflates to lakhs.
+  function parseStipendMonthly(s) {
+    if (!s) return null;
+    const cleaned = String(s).replace(/[,\s₹]/g, "");
+    const n = parseFloat(cleaned);
+    return isNaN(n) || n <= 0 ? null : n;
+  }
+
+  // Compute the canonical annual CTC for a row.
+  // Priority: parsed CTC > parsed basePay > stipendUG×12.
+  // Returns { value: rupees|null, source: "ctc"|"basePay"|"stipendx12"|"unknown" }.
+  function computeAnnualCTC(row) {
+    const ctc = parseAnnualPay(row.ctc);
+    if (ctc != null) return { value: ctc, source: "ctc" };
+    const bp = parseAnnualPay(row.basePay);
+    if (bp != null) return { value: bp, source: "basePay" };
+    const stipend = parseStipendMonthly(row.stipendUG);
+    if (stipend != null) return { value: stipend * 12, source: "stipendx12" };
+    return { value: null, source: "unknown" };
   }
 
   // ---------- AI enrichment (Groq) ----------
@@ -531,9 +547,18 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       });
     }
 
-    const sorted = branchFiltered
-      .map((r) => ({ ...r, _comp: compensationValue(r) }))
-      .sort((a, b) => a._comp - b._comp);
+    // Attach explicit annualCTC + source on every row, then sort ascending.
+    branchFiltered.forEach((r) => {
+      const { value, source } = computeAnnualCTC(r);
+      r.annualCTC = value;
+      r.compSource = source;
+      r.annualCTCDisplay = value != null ? `₹${(value / 100000).toFixed(2)} LPA` : "";
+    });
+    const sorted = branchFiltered.slice().sort((a, b) => {
+      const av = a.annualCTC == null ? Infinity : a.annualCTC;
+      const bv = b.annualCTC == null ? Infinity : b.annualCTC;
+      return av - bv;
+    });
 
     setProgress(`Done. ${sorted.length} rows ready.`);
     return {
