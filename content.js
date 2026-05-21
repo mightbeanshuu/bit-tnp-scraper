@@ -1,8 +1,6 @@
-// BIT TNP Scraper — content script (v3)
-// Three-stage crawl:
-//   1. Dashboard table → company list + detail/notice URLs
-//   2. /job/info/<hash>  → JD, designation, stipend, eligibility (Courses + Criteria), CTC
-//   3. /job/notice/<hash> → /resultlist/<id>/<hash> link → selected candidates table
+// BIT TNP Scraper — content script (v4)
+// Walks all pagination pages, fetches detail/notice/result pages, returns
+// structured rows JSON. Formatting (CSV/XLSX/PDF) happens in popup.js.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -12,31 +10,40 @@
   function setProgress(msg) {
     window.__BIT_TNP_PROGRESS__ = msg;
   }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ---------- Dashboard ----------
-  function extractDashboardRows() {
+  function pickDashboardTable() {
     const tables = Array.from(document.querySelectorAll("table"));
-    let chosen = null;
     for (const t of tables) {
       const headers = Array.from(t.querySelectorAll("th, thead td"))
         .map((c) => (c.innerText || "").toLowerCase().trim());
-      if (headers.some((h) => /company|organi/.test(h)) && headers.some((h) => /action/.test(h))) {
-        chosen = t;
-        break;
+      if (headers.some((h) => /company|organi/.test(h)) &&
+          headers.some((h) => /action/.test(h))) {
+        return t;
       }
     }
-    if (!chosen) chosen = tables[0];
-    if (!chosen) return [];
+    return tables[0] || null;
+  }
 
-    const bodyRows = chosen.querySelectorAll("tbody tr").length
-      ? Array.from(chosen.querySelectorAll("tbody tr"))
-      : Array.from(chosen.querySelectorAll("tr")).slice(1);
+  function extractCurrentPage(table) {
+    if (!table) return [];
+    const bodyRows = table.querySelectorAll("tbody tr").length
+      ? Array.from(table.querySelectorAll("tbody tr"))
+      : Array.from(table.querySelectorAll("tr")).slice(1);
 
     return bodyRows
       .map((tr) => {
+        // Skip rows hidden via CSS (DataTables pagination uses display:none).
+        if (tr.offsetParent === null && !tr.hidden) {
+          // offsetParent null in some cases isn't conclusive; double-check style
+          const style = window.getComputedStyle(tr);
+          if (style.display === "none" || style.visibility === "hidden") return null;
+        }
         const cells = Array.from(tr.querySelectorAll("td"));
         if (cells.length < 2) return null;
         const company = (cells[0].innerText || "").trim();
+        if (!company) return null;
         const deadline = cells[1] ? (cells[1].innerText || "").trim() : "";
         const postedOn = cells[2] ? (cells[2].innerText || "").trim() : "";
 
@@ -57,8 +64,105 @@
       .filter(Boolean);
   }
 
+  function getTotalEntries() {
+    const m = (document.body.innerText || "").match(
+      /showing\s+\d+\s+to\s+\d+\s+of\s+([\d,]+)\s+entries/i
+    );
+    return m ? parseInt(m[1].replace(/,/g, "")) : null;
+  }
+
+  function findNextButton() {
+    const candidates = Array.from(document.querySelectorAll(
+      ".paginate_button.next, li.next, a.next, button.next, [aria-label='Next']"
+    ));
+    for (const c of candidates) {
+      if (c.offsetParent !== null) return c;
+    }
+    // Fallback: scan for "Next" text inside a pagination-like container.
+    const all = document.querySelectorAll("a, button, li, span");
+    for (const el of all) {
+      const t = (el.innerText || "").trim().toLowerCase();
+      if (t === "next" || t === ">" || t === "›") {
+        let p = el;
+        for (let i = 0; i < 5 && p; i++) {
+          if (/pagin/i.test(p.className || "")) return el;
+          p = p.parentElement;
+        }
+      }
+    }
+    return null;
+  }
+
+  function isDisabled(el) {
+    if (!el) return true;
+    if (el.classList.contains("disabled")) return true;
+    if (el.getAttribute("aria-disabled") === "true") return true;
+    if (el.hasAttribute("disabled")) return true;
+    return false;
+  }
+
+  async function walkAllPages() {
+    const all = [];
+    const seen = new Set();
+    const table = pickDashboardTable();
+    if (!table) return all;
+
+    const total = getTotalEntries();
+    setProgress(`Total entries reported: ${total ?? "unknown"}`);
+
+    // First, try assuming client-side DataTables (all rows in DOM).
+    const firstPass = extractCurrentPage(table);
+    if (total && firstPass.length >= total) {
+      // All rows are already in DOM — done.
+      for (const r of firstPass) {
+        const key = r.viewApplyUrl || r.company;
+        if (!seen.has(key)) { seen.add(key); all.push(r); }
+      }
+      return all;
+    }
+
+    // Otherwise, walk pagination clicking Next.
+    let pageNum = 1;
+    const maxPages = 60;
+    while (pageNum <= maxPages) {
+      const rows = extractCurrentPage(table);
+      let added = 0;
+      for (const r of rows) {
+        const key = r.viewApplyUrl || r.company + "|" + r.postedOn;
+        if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
+      }
+      setProgress(`Page ${pageNum}: +${added} (total ${all.length}${total ? `/${total}` : ""})`);
+
+      if (total && all.length >= total) break;
+
+      const nextBtn = findNextButton();
+      if (!nextBtn) break;
+      // The next button might be on a parent li; check its parent for disabled too.
+      if (isDisabled(nextBtn) || isDisabled(nextBtn.parentElement)) break;
+
+      const prevKey = rows[0]?.viewApplyUrl || rows[0]?.company;
+      const clickEl = nextBtn.tagName === "A" || nextBtn.tagName === "BUTTON"
+        ? nextBtn
+        : nextBtn.querySelector("a, button") || nextBtn;
+      clickEl.click();
+
+      // Wait until the first row of the table changes.
+      const start = Date.now();
+      let changed = false;
+      while (Date.now() - start < 8000) {
+        await sleep(150);
+        const fresh = extractCurrentPage(table);
+        const newKey = fresh[0]?.viewApplyUrl || fresh[0]?.company;
+        if (newKey && newKey !== prevKey) { changed = true; break; }
+      }
+      if (!changed) break;
+      pageNum++;
+    }
+    return all;
+  }
+
   // ---------- Section text mining ----------
-  const SECTIONS_AFTER = [
+  const SECTIONS = [
     "REGISTRATION", "JOB PROFILE DETAILS", "STIPEND DETAILS",
     "SALARY DETAILS", "CTC DETAILS", "REMUNERATION", "SELECTION PROCESS",
     "ELIGIBILITY", "CAMPUSES CONSIDERED", "COMPANY DETAILS", "Note:",
@@ -66,46 +170,33 @@
 
   function getSection(text, start) {
     const upper = text.toUpperCase();
-    const startUpper = start.toUpperCase();
-    const i = upper.indexOf(startUpper);
+    const i = upper.indexOf(start.toUpperCase());
     if (i === -1) return "";
-    const after = i + startUpper.length;
+    const after = i + start.length;
     let end = text.length;
-    for (const next of SECTIONS_AFTER) {
-      if (next.toUpperCase() === startUpper) continue;
+    for (const next of SECTIONS) {
+      if (next.toUpperCase() === start.toUpperCase()) continue;
       const j = upper.indexOf(next.toUpperCase(), after);
       if (j !== -1 && j < end) end = j;
     }
     return text.slice(after, end).trim();
   }
 
-  // ---------- Detail page parsing ----------
   function parseDetailPage(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const data = {
-      type: "",
-      designation: "",
-      jobDescription: "",
-      placeOfPosting: "",
-      stipendUG: "",
-      stipendPG: "",
-      basePay: "",
-      ctc: "",
-      courses: "",
-      criteriaUG: "",
-      criteriaPG: "",
-      companyURL: "",
-      yearOfEstablishment: "",
+      type: "", designation: "", jobDescription: "", placeOfPosting: "",
+      stipendUG: "", stipendPG: "", basePay: "", ctc: "",
+      courses: "", criteriaUG: "", criteriaPG: "",
+      companyURL: "", yearOfEstablishment: "",
     };
 
-    // Strategy 1: tabular label/value rows
     doc.querySelectorAll("tr").forEach((tr) => {
       const cells = Array.from(tr.querySelectorAll("td, th"));
       if (cells.length < 2) return;
       const label = (cells[0].innerText || "").toLowerCase().trim();
       const value = cells.slice(1).map((c) => (c.innerText || "").trim()).filter(Boolean).join(" | ");
       if (!value) return;
-
       if (/job ?designation|^designation$/.test(label)) data.designation ||= value;
       else if (/^job ?description$|^description$/.test(label)) data.jobDescription ||= value;
       else if (/place ?of ?posting|^location$/.test(label)) data.placeOfPosting ||= value;
@@ -113,17 +204,14 @@
       else if (/year ?of ?establishment/.test(label)) data.yearOfEstablishment ||= value;
     });
 
-    // Strategy 2: section-based text mining
     const bodyText = (doc.body?.innerText || "").replace(/\r/g, "");
 
-    // Type — first non-empty line of JOB PROFILE DETAILS
     const jpd = getSection(bodyText, "JOB PROFILE DETAILS");
     if (jpd) {
-      const firstLine = jpd.split("\n").map((s) => s.trim()).find(Boolean);
-      if (firstLine && firstLine.length < 60) data.type = firstLine;
+      const first = jpd.split("\n").map((s) => s.trim()).find(Boolean);
+      if (first && first.length < 60) data.type = first;
     }
 
-    // Stipend
     const stipend = getSection(bodyText, "STIPEND DETAILS");
     if (stipend) {
       const ug = stipend.match(/For\s+UG\s*₹?\s*([\d,]+)/i);
@@ -132,65 +220,53 @@
       if (pg) data.stipendPG = pg[1].replace(/,/g, "");
     }
 
-    // Salary / CTC
     const salary = getSection(bodyText, "SALARY DETAILS") ||
-      getSection(bodyText, "CTC DETAILS") ||
-      getSection(bodyText, "REMUNERATION");
-    const salaryText = salary || bodyText;
+                   getSection(bodyText, "CTC DETAILS") ||
+                   getSection(bodyText, "REMUNERATION");
+    const sText = salary || bodyText;
     if (!data.ctc) {
-      const ctcM = salaryText.match(/(?:CTC|Total\s*Pay|Package)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (ctcM) data.ctc = ctcM[1].trim().replace(/\s+/g, " ");
+      const m = sText.match(/(?:CTC|Total\s*Pay|Package)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
+      if (m) data.ctc = m[1].trim().replace(/\s+/g, " ");
     }
     if (!data.basePay) {
-      const bpM = salaryText.match(/(?:Base\s*Pay|Base\s*Salary|Fixed\s*Pay)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (bpM) data.basePay = bpM[1].trim().replace(/\s+/g, " ");
+      const m = sText.match(/(?:Base\s*Pay|Base\s*Salary|Fixed\s*Pay)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
+      if (m) data.basePay = m[1].trim().replace(/\s+/g, " ");
     }
 
-    // Eligibility — Courses + Criteria
     const elig = getSection(bodyText, "ELIGIBILITY");
     if (elig) {
       const coursesM = elig.match(/Courses\s*:?\s*([\s\S]*?)(?=Criteria|$)/i);
       if (coursesM) {
-        const parts = coursesM[1]
-          .split(/[\n,]+/)
-          .map((s) => s.trim())
-          .filter(Boolean);
+        const parts = coursesM[1].split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
         data.courses = Array.from(new Set(parts)).join(", ");
       }
-      const ugM = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
-      const pgM = elig.match(/(?:^|\n)\s*PG\s*[-:]\s*([^\n]*)/i);
-      if (ugM) data.criteriaUG = ugM[1].trim();
-      if (pgM) data.criteriaPG = pgM[1].trim();
+      const ug = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
+      const pg = elig.match(/(?:^|\n)\s*PG\s*[-:]\s*([^\n]*)/i);
+      if (ug) data.criteriaUG = ug[1].trim();
+      if (pg) data.criteriaPG = pg[1].trim();
     }
 
     return data;
   }
 
-  // ---------- Notice page → result links ----------
+  // ---------- Notice → result link discovery ----------
   function extractResultLinks(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const links = [];
-    doc.querySelectorAll('a[href*="/resultlist/"]').forEach((a) => {
-      const href = a.getAttribute("href");
-      if (!href) return;
-      // Use parent context to get a richer label.
-      const ownText = (a.innerText || "").trim();
-      const parentText = ((a.parentElement?.innerText) || "").trim();
-      links.push({
-        url: new URL(href, location.origin).href,
-        label: ownText || parentText,
-      });
-    });
-    return links;
+    return Array.from(doc.querySelectorAll('a[href*="/resultlist/"]'))
+      .map((a) => ({
+        url: new URL(a.getAttribute("href"), location.origin).href,
+        label: ((a.innerText || "").trim() ||
+                (a.parentElement?.innerText || "").trim() || "").slice(0, 200),
+      }));
   }
 
   function pickFinalLink(links) {
     if (!links.length) return null;
-    const finalOne = links.find((l) => /final/i.test(l.label));
-    if (finalOne) return finalOne;
-    const hrOne = links.find((l) => /\bhr\b/i.test(l.label));
-    if (hrOne) return hrOne;
-    return links[links.length - 1];
+    return (
+      links.find((l) => /final/i.test(l.label)) ||
+      links.find((l) => /\bhr\b/i.test(l.label)) ||
+      links[links.length - 1]
+    );
   }
 
   // ---------- Result page parsing ----------
@@ -199,15 +275,11 @@
     const tables = Array.from(doc.querySelectorAll("table"));
     let target = null;
     for (const t of tables) {
-      const header = (t.innerText || "").toLowerCase().slice(0, 300);
-      if (/roll\s*no/.test(header) && /branch/.test(header)) {
-        target = t;
-        break;
-      }
+      const h = (t.innerText || "").toLowerCase().slice(0, 300);
+      if (/roll\s*no/.test(h) && /branch/.test(h)) { target = t; break; }
     }
     if (!target) return [];
 
-    // Map header positions to columns.
     const headerRow = target.querySelector("thead tr") || target.querySelector("tr");
     if (!headerRow) return [];
     const headerCells = Array.from(headerRow.querySelectorAll("th, td"))
@@ -247,11 +319,14 @@
       .join("; ");
     const tally = {};
     candidates.forEach((c) => {
-      const key = c.branch || "Unknown";
-      tally[key] = (tally[key] || 0) + 1;
+      const k = c.branch || "Unknown";
+      tally[k] = (tally[k] || 0) + 1;
     });
-    const byBranch = Object.entries(tally).map(([b, n]) => `${b}: ${n}`).join(", ");
-    return { list, count: candidates.length, byBranch };
+    return {
+      list,
+      count: candidates.length,
+      byBranch: Object.entries(tally).map(([b, n]) => `${b}: ${n}`).join(", "),
+    };
   }
 
   // ---------- Fetch helpers ----------
@@ -267,17 +342,12 @@
 
   async function withLimit(items, limit, worker, label) {
     const results = new Array(items.length);
-    let idx = 0;
-    let done = 0;
+    let idx = 0, done = 0;
     const total = items.length;
     async function loop() {
       while (idx < total) {
         const i = idx++;
-        try {
-          results[i] = await worker(items[i], i);
-        } catch {
-          results[i] = null;
-        }
+        try { results[i] = await worker(items[i], i); } catch { results[i] = null; }
         done++;
         if (label) setProgress(`${label}: ${done}/${total}`);
       }
@@ -303,7 +373,7 @@
   function isBranchEligible(row, enabled) {
     const list = Object.entries(enabled).filter(([, v]) => v).map(([k]) => k);
     if (list.length === 0) return true;
-    if (!row.courses || !row.courses.trim()) return true; // unknown — keep
+    if (!row.courses || !row.courses.trim()) return true;
     return list.some((b) => BRANCH_PATTERNS[b].some((re) => re.test(row.courses)));
   }
 
@@ -328,67 +398,25 @@
     if (row.basePay) return parseRupees(row.basePay);
     if (row.stipendUG) {
       const n = parseFloat(row.stipendUG);
-      if (!isNaN(n)) return n * 12; // annualise
+      if (!isNaN(n)) return n * 12;
     }
     return Infinity;
   }
 
-  // ---------- CSV ----------
-  const COLUMNS = [
-    ["Company", "company"],
-    ["Type", "type"],
-    ["Designation", "designation"],
-    ["Job Description", "jobDescription"],
-    ["Place of Posting", "placeOfPosting"],
-    ["Eligible Courses", "courses"],
-    ["UG Criteria", "criteriaUG"],
-    ["PG Criteria", "criteriaPG"],
-    ["Stipend UG (₹/mo)", "stipendUG"],
-    ["Stipend PG (₹/mo)", "stipendPG"],
-    ["Base Pay", "basePay"],
-    ["CTC", "ctc"],
-    ["Final Selected (count)", "selectedCount"],
-    ["Final Selected (by branch)", "selectedByBranch"],
-    ["Final Selected (names)", "selectedList"],
-    ["Deadline", "deadline"],
-    ["Posted On", "postedOn"],
-    ["Company URL", "companyURL"],
-    ["Detail Page", "viewApplyUrl"],
-    ["Updates Page", "updatesUrl"],
-  ];
-
-  function csvEscape(s) {
-    if (s == null) return "";
-    const str = String(s).replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-    if (/[",]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-    return str;
-  }
-
-  function toCSV(rows) {
-    const lines = [COLUMNS.map(([h]) => csvEscape(h)).join(",")];
-    for (const r of rows) {
-      lines.push(COLUMNS.map(([, k]) => csvEscape(r[k] ?? "")).join(","));
-    }
-    return lines.join("\n");
-  }
-
-  // ---------- Main entry ----------
+  // ---------- Main ----------
   window.__BIT_TNP_SCRAPE__ = async function (options) {
-    setProgress("Reading dashboard table...");
-    const rows = extractDashboardRows();
-    if (!rows.length) {
-      return { error: "No dashboard table found. Make sure you are on the Recent Jobs page.", rawCount: 0 };
+    setProgress("Walking dashboard pagination...");
+    const dashboardRows = await walkAllPages();
+    if (!dashboardRows.length) {
+      return { error: "No dashboard rows found.", rawCount: 0 };
     }
 
-    setProgress(`Found ${rows.length} companies. Fetching detail pages...`);
+    setProgress(`Total companies: ${dashboardRows.length}. Fetching detail pages...`);
     const detailHTMLs = await withLimit(
-      rows.map((r) => r.viewApplyUrl),
-      5,
-      fetchHTML,
-      "Detail pages"
+      dashboardRows.map((r) => r.viewApplyUrl),
+      4, fetchHTML, "Detail pages"
     );
-
-    const merged = rows.map((row, i) => {
+    const merged = dashboardRows.map((row, i) => {
       const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
       return { ...row, ...det };
     });
@@ -396,33 +424,27 @@
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
     if (options.fetchResults) {
-      setProgress(`Fetching notice pages for ${branchFiltered.length} companies...`);
+      setProgress(`Branch-filtered: ${branchFiltered.length}. Fetching notice pages...`);
       const noticeHTMLs = await withLimit(
         branchFiltered.map((r) => r.updatesUrl),
-        4,
-        fetchHTML,
-        "Notice pages"
+        4, fetchHTML, "Notice pages"
       );
 
-      // Pick the final result link per company (one per company keeps it tractable).
-      const finalResultURLs = noticeHTMLs.map((html) => {
+      const finalUrls = noticeHTMLs.map((html) => {
         if (!html) return null;
         const links = extractResultLinks(html);
         return pickFinalLink(links)?.url || null;
       });
 
-      setProgress(`Fetching final-round result pages...`);
-      const resultHTMLs = await withLimit(finalResultURLs, 4, fetchHTML, "Result pages");
+      setProgress(`Fetching final result pages...`);
+      const resultHTMLs = await withLimit(finalUrls, 4, fetchHTML, "Result pages");
 
       branchFiltered.forEach((row, i) => {
-        const html = resultHTMLs[i];
-        if (!html) {
-          row.selectedCount = 0;
-          row.selectedByBranch = "";
-          row.selectedList = "";
+        if (!resultHTMLs[i]) {
+          row.selectedCount = 0; row.selectedByBranch = ""; row.selectedList = "";
           return;
         }
-        const cands = parseResultPage(html);
+        const cands = parseResultPage(resultHTMLs[i]);
         const agg = aggregateSelected(cands);
         row.selectedCount = agg.count;
         row.selectedByBranch = agg.byBranch;
@@ -434,22 +456,25 @@
       .map((r) => ({ ...r, _comp: compensationValue(r) }))
       .sort((a, b) => a._comp - b._comp);
 
-    setProgress(`Done. ${sorted.length} rows in CSV.`);
+    setProgress(`Done. ${sorted.length} rows ready.`);
     return {
-      rawCount: rows.length,
+      rawCount: dashboardRows.length,
       detailFetched: detailHTMLs.filter(Boolean).length,
       afterBranch: branchFiltered.length,
-      csv: toCSV(sorted),
+      rows: sorted,
     };
   };
 
   window.__BIT_TNP_INSPECT__ = function () {
-    const rows = extractDashboardRows();
-    const lines = [`Dashboard rows: ${rows.length}`];
-    if (rows.length > 0) {
-      lines.push("", "First row:", JSON.stringify(rows[0], null, 2));
-    }
-    return lines.join("\n");
+    const t = pickDashboardTable();
+    const rows = extractCurrentPage(t);
+    const total = getTotalEntries();
+    return JSON.stringify({
+      tablesFound: document.querySelectorAll("table").length,
+      currentPageRows: rows.length,
+      totalEntriesReported: total,
+      firstRow: rows[0] || null,
+    }, null, 2);
   };
 
   window.__BIT_TNP_GET_PROGRESS__ = function () {

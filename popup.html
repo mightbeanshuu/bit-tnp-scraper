@@ -3,21 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    body { width: 340px; font-family: -apple-system, sans-serif; padding: 12px; margin: 0; }
+    body { width: 360px; font-family: -apple-system, sans-serif; padding: 12px; margin: 0; }
     h1 { font-size: 14px; margin: 0 0 6px; }
     .hint { color: #666; font-size: 11px; margin-bottom: 8px; }
     .row { margin: 8px 0; display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
     button { width: 100%; padding: 10px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; margin-top: 4px; }
     button:disabled { background: #aaa; cursor: not-allowed; }
     button.secondary { background: #5f6368; }
-    #status { margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+    #status { margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, monospace; }
     label { font-size: 12px; }
+    select { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
     .section-title { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }
   </style>
 </head>
 <body>
   <h1>BIT TNP Scraper</h1>
-  <div class="hint">Open the Recent Jobs page on tp.bitmesra.co.in with Placement Year = 2025-26, set "Show entries" to a value covering all companies, then click Scrape.</div>
+  <div class="hint">Open the Recent Jobs page on tp.bitmesra.co.in with Placement Year = 2025-26, then click Scrape. The scraper walks all 15 paginated pages automatically.</div>
 
   <div class="section-title">Branches (OR filter)</div>
   <div class="row">
@@ -26,12 +27,21 @@
     <label><input type="checkbox" id="branchECE" checked /> ECE</label>
   </div>
 
+  <div class="section-title">Output format</div>
+  <div class="row">
+    <select id="format">
+      <option value="xlsx" selected>Excel (.xlsx)</option>
+      <option value="csv">CSV</option>
+      <option value="pdf">PDF (print-ready)</option>
+    </select>
+  </div>
+
   <div class="section-title">Options</div>
   <div class="row">
     <label><input type="checkbox" id="fetchResults" checked /> Include final-round selected candidates (slower)</label>
   </div>
 
-  <button id="scrapeBtn">Scrape → CSV</button>
+  <button id="scrapeBtn">Scrape now</button>
   <button id="inspectBtn" class="secondary">Inspect DOM (debug)</button>
 
   <div id="status">Ready.</div>
