@@ -1,5 +1,6 @@
 let allRows = [];
 let maxLPA = 100;
+let viewMode = "list"; // "list" | "grid"
 
 const $ = (id) => document.getElementById(id);
 
@@ -97,10 +98,16 @@ function bindEvents() {
   $("sort").addEventListener("change", render);
 
   document.addEventListener("click", (e) => {
-    if (e.target.closest("a")) return; // links don't toggle
+    if (e.target.closest("a")) return;       // don't intercept link clicks
+    if (e.target.closest(".modal")) return;  // don't toggle when clicking inside modal
     const card = e.target.closest(".card");
     if (!card) return;
-    card.classList.toggle("expanded");
+    const idx = parseInt(card.getAttribute("data-idx"), 10);
+    if (viewMode === "grid") {
+      openModal(idx);
+    } else {
+      card.classList.toggle("expanded");
+    }
   });
 }
 
@@ -148,7 +155,50 @@ function parseDeadline(s) {
   return new Date(`${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`).getTime() || Infinity;
 }
 
-function cardHTML(r) {
+function selectedBadge(r) {
+  const n = r.selectedCount || 0;
+  const cls = n === 0 ? "sel-corner zero" : "sel-corner";
+  return `<span class="${cls}" title="Final-round selected candidates">${n === 0 ? "—" : "✓ " + n + " selected"}</span>`;
+}
+
+function selectedGridHTML(r) {
+  if (!r.selectedList) return "";
+  const items = r.selectedList.split(";").map((s) => s.trim()).filter(Boolean);
+  return `<div class="selected-grid">${items.map((it) => `<div>• ${escapeHtml(it)}</div>`).join("")}</div>`;
+}
+
+function detailsHTML(r) {
+  return `
+    ${r.jobDescription ? `<h4>Full Job Description</h4><div class="body">${escapeHtml(r.jobDescription)}</div>` : ""}
+    ${(r.stipendUG || r.stipendPG || r.basePay || r.ctc) ? `
+      <h4>Compensation breakdown</h4>
+      <div class="body">${[
+        r.ctc ? `CTC: ${escapeHtml(r.ctc)}` : "",
+        r.basePay ? `Base Pay: ${escapeHtml(r.basePay)}` : "",
+        r.stipendUG ? `Stipend UG: ₹${escapeHtml(r.stipendUG)}/mo` : "",
+        r.stipendPG ? `Stipend PG: ₹${escapeHtml(r.stipendPG)}/mo` : "",
+        r.annualCTCDisplay ? `<strong>Annual CTC: ${escapeHtml(r.annualCTCDisplay)}</strong>` : "",
+      ].filter(Boolean).join(" · ")}</div>` : ""}
+    ${(r.criteriaUG || r.criteriaPG) ? `
+      <h4>Eligibility criteria</h4>
+      <div class="body">${[
+        r.criteriaUG ? `UG: ${escapeHtml(r.criteriaUG)}` : "",
+        r.criteriaPG ? `PG: ${escapeHtml(r.criteriaPG)}` : "",
+      ].filter(Boolean).join("<br/>")}</div>` : ""}
+    ${r.selectedCount ? `
+      <h4>Selected candidates (${r.selectedCount})</h4>
+      <div class="branch-tally">${(r.selectedByBranch || "").split(",").filter(Boolean)
+        .map((s) => `<span class="b">${escapeHtml(s.trim())}</span>`).join("")}</div>
+      ${selectedGridHTML(r)}` : ""}
+    <h4>Links</h4>
+    <div class="body">
+      ${r.viewApplyUrl ? `<a href="${escapeHtml(r.viewApplyUrl)}" target="_blank">View posting (apply page) ↗</a><br/>` : ""}
+      ${r.updatesUrl ? `<a href="${escapeHtml(r.updatesUrl)}" target="_blank">Updates / Notifications ↗</a><br/>` : ""}
+      ${r.companyURL ? `<a href="${escapeHtml(/^https?:/i.test(r.companyURL) ? r.companyURL : "https://" + r.companyURL)}" target="_blank">Company website ↗</a>` : ""}
+    </div>`;
+}
+
+function cardHTML(r, idx) {
   const pay = payDisplay(r);
   const courses = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
   const summary = r.jdSummary || (r.jobDescription || "").slice(0, 200);
@@ -157,18 +207,17 @@ function cardHTML(r) {
   const badges = [];
   if (r.type) badges.push(`<span class="badge type">${escapeHtml(r.type)}</span>`);
   if (r.criteriaUG && /\d/.test(r.criteriaUG)) badges.push(`<span class="badge cgpa">${escapeHtml(r.criteriaUG)}</span>`);
-  if (r.selectedCount) badges.push(`<span class="badge selected">✓ ${r.selectedCount} selected</span>`);
-  courses.slice(0, 4).forEach((c) => badges.push(`<span class="badge">${escapeHtml(c)}</span>`));
-  if (courses.length > 4) badges.push(`<span class="badge">+${courses.length - 4} more</span>`);
-
-  // Build selected candidates grid
-  let selectedGrid = "";
-  if (r.selectedList) {
-    const items = r.selectedList.split(";").map((s) => s.trim()).filter(Boolean);
-    selectedGrid = `<div class="selected-grid">${items.map((it) => `<div>• ${escapeHtml(it)}</div>`).join("")}</div>`;
+  // Grid view shows only branches + stipend; list view shows everything.
+  if (viewMode === "grid") {
+    courses.slice(0, 3).forEach((c) => badges.push(`<span class="badge">${escapeHtml(c)}</span>`));
+    if (courses.length > 3) badges.push(`<span class="badge">+${courses.length - 3}</span>`);
+  } else {
+    courses.slice(0, 4).forEach((c) => badges.push(`<span class="badge">${escapeHtml(c)}</span>`));
+    if (courses.length > 4) badges.push(`<span class="badge">+${courses.length - 4} more</span>`);
   }
 
-  return `<div class="card">
+  return `<div class="card" data-idx="${idx}">
+    ${selectedBadge(r)}
     <div class="card-head">
       <span class="name">${escapeHtml(r.company)}</span>
       <span class="pay">${escapeHtml(pay)}</span>
@@ -177,35 +226,11 @@ function cardHTML(r) {
     <div class="badges">${badges.join("")}</div>
     ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ""}
     <div class="toggle-hint">Click for full details ↓</div>
-
-    <div class="details">
-      ${r.jobDescription ? `<h4>Full Job Description</h4><div class="body">${escapeHtml(r.jobDescription)}</div>` : ""}
-      ${r.stipendUG || r.stipendPG || r.basePay || r.ctc ? `
-        <h4>Compensation breakdown</h4>
-        <div class="body">${[
-          r.ctc ? `CTC: ${escapeHtml(r.ctc)}` : "",
-          r.basePay ? `Base Pay: ${escapeHtml(r.basePay)}` : "",
-          r.stipendUG ? `Stipend UG: ₹${escapeHtml(r.stipendUG)}/mo` : "",
-          r.stipendPG ? `Stipend PG: ₹${escapeHtml(r.stipendPG)}/mo` : "",
-        ].filter(Boolean).join(" · ")}</div>` : ""}
-      ${r.criteriaUG || r.criteriaPG ? `
-        <h4>Eligibility criteria</h4>
-        <div class="body">${[
-          r.criteriaUG ? `UG: ${escapeHtml(r.criteriaUG)}` : "",
-          r.criteriaPG ? `PG: ${escapeHtml(r.criteriaPG)}` : "",
-        ].filter(Boolean).join("<br/>")}</div>` : ""}
-      ${r.selectedCount ? `
-        <h4>Selected candidates (${r.selectedCount})</h4>
-        <div class="branch-tally">${(r.selectedByBranch || "").split(",").filter(Boolean)
-          .map((s) => `<span class="b">${escapeHtml(s.trim())}</span>`).join("")}</div>
-        ${selectedGrid}` : ""}
-      <h4>Links</h4>
-      <div class="body">
-        ${r.viewApplyUrl ? `<a href="${escapeHtml(r.viewApplyUrl)}" target="_blank">View posting (apply page) ↗</a><br/>` : ""}
-        ${r.updatesUrl ? `<a href="${escapeHtml(r.updatesUrl)}" target="_blank">Updates / Notifications ↗</a><br/>` : ""}
-        ${r.companyURL ? `<a href="${escapeHtml(/^https?:/i.test(r.companyURL) ? r.companyURL : "https://" + r.companyURL)}" target="_blank">Company website ↗</a>` : ""}
-      </div>
+    <div class="pay-only">
+      <span class="pay-label">Pay</span>
+      <span class="pay">${escapeHtml(pay)}</span>
     </div>
+    <div class="details">${detailsHTML(r)}</div>
   </div>`;
 }
 
@@ -221,8 +246,40 @@ function render() {
     main.innerHTML = `<div class="empty">No companies match the current filters. Try widening the CTC range or clearing the search.</div>`;
     return;
   }
-  main.innerHTML = lastFiltered.map(cardHTML).join("");
+  main.innerHTML = lastFiltered.map((r, i) => cardHTML(r, i)).join("");
 }
+
+// ============== View toggle + Modal ==============
+function setViewMode(mode) {
+  viewMode = mode === "grid" ? "grid" : "list";
+  const cards = document.getElementById("cards");
+  cards.classList.toggle("view-grid", viewMode === "grid");
+  cards.classList.toggle("view-list", viewMode === "list");
+  document.getElementById("viewList").classList.toggle("active", viewMode === "list");
+  document.getElementById("viewGrid").classList.toggle("active", viewMode === "grid");
+  render();
+}
+
+function openModal(rowIdx) {
+  const r = lastFiltered[rowIdx];
+  if (!r) return;
+  const subline = [r.designation, r.placeOfPosting].filter(Boolean).join(" · ");
+  const modalBody = document.getElementById("modalBody");
+  modalBody.innerHTML = `
+    <h2>${escapeHtml(r.company)}</h2>
+    ${subline ? `<div class="modal-sub">${escapeHtml(subline)}</div>` : ""}
+    ${detailsHTML(r)}`;
+  document.getElementById("modal").hidden = false;
+}
+function closeModal() { document.getElementById("modal").hidden = true; }
+
+document.getElementById("viewList").addEventListener("click", () => setViewMode("list"));
+document.getElementById("viewGrid").addEventListener("click", () => setViewMode("grid"));
+document.getElementById("modalClose").addEventListener("click", closeModal);
+document.getElementById("modalOverlay").addEventListener("click", closeModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
+});
 
 // ============== Stats + AI Insights ==============
 
@@ -583,16 +640,15 @@ function toXLSX(rows) {
   ]);
 }
 
+// Compact PDF — only the essentials per user request:
+// Company · Type · CGPA · Monthly Stipend · Annual CTC · Selected count
 const PDF_COLS = [
   ["Company", (r) => r.company],
   ["Type", (r) => r.type || "—"],
-  ["Role", (r) => r.designation || "—"],
-  ["Summary", (r) => r.jdSummary || ""],
-  ["Eligible", (r) => r.courses || "—"],
   ["CGPA", (r) => r.criteriaUG || "—"],
-  ["Pay", (r) => payDisplay(r)],
-  ["Selected", (r) => r.selectedCount ? `${r.selectedCount} (${r.selectedByBranch || "—"})` : "—"],
-  ["Deadline", (r) => r.deadline || ""],
+  ["Monthly", (r) => r.stipendUG ? `₹${r.stipendUG}/mo` : "—"],
+  ["Annual CTC", (r) => r.annualCTCDisplay || (r.ctc || r.basePay || "—")],
+  ["Selected", (r) => r.selectedCount ? `${r.selectedCount} (${r.selectedByBranch || ""})` : "—"],
 ];
 
 function toPrintHTML(rows) {
