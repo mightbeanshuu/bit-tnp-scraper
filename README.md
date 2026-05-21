@@ -1,4 +1,4 @@
-# BIT TNP Scraper
+# JUST TNP Scraper v2.0.0
 
 A Chrome extension that scrapes the BIT Mesra Training & Placement portal, filters companies by branch (CSE / AIML / ECE), filters by academic year, sorts by CTC ascending, and exports the result as a CSV that opens directly in Excel.
 
