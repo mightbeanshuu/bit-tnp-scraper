@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JUST TNP Scraper",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "JUST TNP Scraper — scrape BIT Mesra TNP, filter by branch + CTC range, sort by compensation, view in an interactive viewer with AI-powered insights.",
   "permissions": ["activeTab", "scripting", "downloads", "storage"],
   "host_permissions": [

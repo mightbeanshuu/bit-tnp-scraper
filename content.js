@@ -231,6 +231,45 @@
     return t;
   }
 
+  // Some companies (FTE roles like VISA) publish salary as a TABLE with
+  // columns Programmes / CTC / Basic Pay / Joining Bonus / RSU / ESOP, and rows
+  // UG / PG. The header-keyword-then-number regex misses these because the
+  // word 'CTC' is in a header cell, far from the actual value in a data cell.
+  function parseSalaryTable(doc) {
+    const tables = Array.from(doc.querySelectorAll("table"));
+    for (const t of tables) {
+      let headerCells = Array.from(t.querySelectorAll("thead th, thead td"));
+      if (headerCells.length === 0) {
+        const firstTr = t.querySelector("tr");
+        if (firstTr) headerCells = Array.from(firstTr.querySelectorAll("th, td"));
+      }
+      const headers = headerCells.map((c) => (c.textContent || "").trim().toLowerCase());
+      const ctcIdx = headers.findIndex((h) => /\bctc\b/.test(h) || /^total\s*pay$/.test(h));
+      if (ctcIdx < 0) continue;
+      const basePayIdx = headers.findIndex((h) => /basic\s*pay|base\s*pay/.test(h));
+      const programIdx = headers.findIndex((h) => /programm?es?|category/.test(h));
+
+      const allRows = t.querySelector("thead")
+        ? Array.from(t.querySelectorAll("tbody tr"))
+        : Array.from(t.querySelectorAll("tr")).slice(1);
+
+      const out = { ugCTC: "", pgCTC: "", ugBasePay: "", pgBasePay: "" };
+      for (const tr of allRows) {
+        const cells = Array.from(tr.querySelectorAll("td"));
+        if (cells.length <= ctcIdx) continue;
+        const program = programIdx >= 0 ? (cells[programIdx].textContent || "").trim().toLowerCase() : "";
+        const ctcText = (cells[ctcIdx].textContent || "").trim().replace(/\s+/g, " ");
+        const bpText = basePayIdx >= 0 ? (cells[basePayIdx].textContent || "").trim().replace(/\s+/g, " ") : "";
+        if (!/\d/.test(ctcText)) continue;
+        if (/\bug\b/.test(program)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
+        else if (/\bpg\b/.test(program)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
+        else if (!out.ugCTC) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
+      }
+      if (out.ugCTC || out.pgCTC) return out;
+    }
+    return null;
+  }
+
   function parseDetailPage(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const data = {
@@ -274,6 +313,14 @@
       if (pg) data.stipendPG = pg[1].replace(/,/g, "");
     }
 
+    // First: try the tabular salary layout (used by VISA, DE Shaw, etc. for FTE roles).
+    const salaryTable = parseSalaryTable(doc);
+    if (salaryTable) {
+      data.ctc = salaryTable.ugCTC || salaryTable.pgCTC || "";
+      data.basePay = salaryTable.ugBasePay || salaryTable.pgBasePay || "";
+    }
+
+    // Fallback: free-text regex for inline salary mentions.
     const salary = getSection(bodyText, "SALARY DETAILS") ||
                    getSection(bodyText, "CTC DETAILS") ||
                    getSection(bodyText, "REMUNERATION");
@@ -298,10 +345,21 @@
         }
         data.courses = Array.from(new Set(parts)).join(", ");
       }
-      const ug = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
-      const pg = elig.match(/(?:^|\n)\s*PG\s*[-:]\s*([^\n]*)/i);
-      if (ug) data.criteriaUG = ug[1].trim();
-      if (pg) data.criteriaPG = pg[1].trim();
+      // Capture the UG line (e.g. "UG - 70%") AND any "Other Criteria" text
+      // that follows (where companies put the real CGPA cutoffs).
+      const ugLine = elig.match(/(?:^|\n)\s*UG\s*[-:]\s*([^\n]*)/i);
+      const pgLine = elig.match(/(?:^|\n)\s*PG\s*[-:]\s*([^\n]*)/i);
+      // Match "Other Criteria:" block after UG/PG until the next blank line or section.
+      const ugBlock = elig.match(/UG\s*[-:][\s\S]*?Other\s*Criteria\s*:\s*([\s\S]*?)(?=\n\s*PG\s*[-:]|\n\s*Other|\n\s*CAMPUSES|\n\s*COMPANY|$)/i);
+      const pgBlock = elig.match(/PG\s*[-:][\s\S]*?Other\s*Criteria\s*:\s*([\s\S]*?)(?=\n\s*CAMPUSES|\n\s*COMPANY|$)/i);
+      const ugParts = [];
+      if (ugLine) ugParts.push(ugLine[1].trim());
+      if (ugBlock) ugParts.push(ugBlock[1].replace(/\s+/g, " ").trim());
+      const pgParts = [];
+      if (pgLine) pgParts.push(pgLine[1].trim());
+      if (pgBlock) pgParts.push(pgBlock[1].replace(/\s+/g, " ").trim());
+      data.criteriaUG = ugParts.filter(Boolean).join(" · ");
+      data.criteriaPG = pgParts.filter(Boolean).join(" · ");
     }
 
     // Parse circuital vs non-circuital CGPA from the criteria text.
@@ -392,24 +450,31 @@
   }
 
   // ---------- Result page parsing ----------
+  // Uses textContent throughout — innerText is unreliable on DOMParser-detached
+  // documents (they have no layout, so block-level joining doesn't work).
   function parseResultPage(html) {
+    if (!html) return [];
     const doc = new DOMParser().parseFromString(html, "text/html");
     const tables = Array.from(doc.querySelectorAll("table"));
     let target = null;
     for (const t of tables) {
-      const h = (t.innerText || "").toLowerCase().slice(0, 300);
-      if (/roll\s*no/.test(h) && /branch/.test(h)) { target = t; break; }
+      const h = (t.textContent || "").toLowerCase();
+      // Permissive: any table that has Name + Branch columns, or Roll + Branch.
+      if ((/\broll/.test(h) || /\bname\b/.test(h)) && /\bbranch\b/.test(h)) {
+        target = t;
+        break;
+      }
     }
     if (!target) return [];
 
     const headerRow = target.querySelector("thead tr") || target.querySelector("tr");
     if (!headerRow) return [];
     const headerCells = Array.from(headerRow.querySelectorAll("th, td"))
-      .map((c) => (c.innerText || "").toLowerCase().trim());
+      .map((c) => (c.textContent || "").toLowerCase().trim());
     const colOf = (re) => headerCells.findIndex((h) => re.test(h));
     const idx = {
       roll: colOf(/roll/),
-      name: colOf(/name/),
+      name: colOf(/^name$|student.*name/),
       degree: colOf(/degree/),
       branch: colOf(/branch/),
       centre: colOf(/centre|center|campus/),
@@ -421,15 +486,18 @@
 
     return dataRows
       .map((tr) => {
-        const cells = Array.from(tr.querySelectorAll("td")).map((c) => (c.innerText || "").trim());
+        const cells = Array.from(tr.querySelectorAll("td")).map((c) => (c.textContent || "").trim());
         if (cells.length < 3) return null;
-        return {
+        const row = {
           rollNo: idx.roll >= 0 ? cells[idx.roll] : "",
           name: idx.name >= 0 ? cells[idx.name] : "",
           degree: idx.degree >= 0 ? cells[idx.degree] : "",
           branch: idx.branch >= 0 ? cells[idx.branch] : "",
           centre: idx.centre >= 0 ? cells[idx.centre] : "",
         };
+        // Drop rows that look like accidentally-matched non-data (no name and no roll).
+        if (!row.name && !row.rollNo) return null;
+        return row;
       })
       .filter(Boolean);
   }

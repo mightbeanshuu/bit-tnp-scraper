@@ -177,15 +177,21 @@ function formatCGPA(s) {
 }
 
 function cgpaCardDisplay(r) {
+  const raw = r.criteriaUG || "";
+  // If criteria text has multiple CGPA references (e.g. DE Shaw's
+  // "7 CGPA (CS, IT) and 8 CGPA (Circuital branches)"), show it raw —
+  // any single-number parse would be misleading.
+  const cgpaMentions = (raw.match(/\bCGPA\b/gi) || []).length;
+  if (cgpaMentions >= 2) return escapeHtml(raw.slice(0, 220));
+
   const circ = formatCGPA(r.cgpaCirc);
   const nonCirc = formatCGPA(r.cgpaNonCirc);
-  // Always show both labels separately, per user request.
   if (circ && nonCirc) {
     return `Circuital <strong>${circ}</strong> · Non-circuital <strong>${nonCirc}</strong>`;
   }
   if (circ) return `Circuital <strong>${circ}</strong>`;
   if (nonCirc) return `Non-circuital <strong>${nonCirc}</strong>`;
-  if (r.criteriaUG) return escapeHtml(r.criteriaUG.slice(0, 80));
+  if (raw) return escapeHtml(raw.slice(0, 120));
   return "";
 }
 
