@@ -358,16 +358,27 @@
 
   // ---------- Branch filter ----------
   const BRANCH_PATTERNS = {
-    CSE: [/computer\s*science/i, /\bcse\b/i, /information\s*technology/i, /\bit\b(?!\w)/i],
+    CSE: [/computer\s*science/i, /\bcse\b/i],
+    IT: [/information\s*tech/i, /\bit\b(?!\w)/i],
     AIML: [
       /ai\s*&?\s*ml/i, /ai\s*and\s*ml/i, /aiml/i,
       /artificial\s*intelligence/i, /machine\s*learning/i,
-      /\bmath(?:ematics)?\s*(?:&|and)\s*computing\b/i, /\bm&c\b/i,
+    ],
+    MC: [
+      /math(?:ematics)?\s*(?:&|and)\s*computing/i, /\bm&c\b/i, /\bm\.?c\.?\b/i,
     ],
     ECE: [
-      /electronics(?:\s*(?:&|and)\s*communication)?/i, /\bece\b/i,
-      /electronics\s*engineering/i, /\bvlsi\b/i,
+      /electronics?\s*(?:&|and)\s*communication/i, /\bece\b/i, /\bvlsi\b/i,
+      /electronics(?:\s*engineering)?(?!\s*(?:&|and)\s*electrical)/i,
     ],
+    EEE: [
+      /electrical\s*(?:&|and)\s*electronics/i, /\beee\b/i,
+      /electrical\s*engineering/i,
+    ],
+    ME: [/mechanical\s*engineering/i, /\bme\b(?!\w)/i, /production\s*engineering/i],
+    CE: [/civil\s*engineering/i, /\bce\b(?!\w)/i],
+    CHEM: [/chemical\s*engineering/i, /\bchemical\b/i],
+    BT: [/biotech/i, /\bbt\b(?!\w)/i, /bioengineering/i, /biological/i],
   };
 
   function isBranchEligible(row, enabled) {

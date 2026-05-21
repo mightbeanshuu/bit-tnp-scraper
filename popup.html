@@ -142,11 +142,22 @@
   <div class="body">
 
     <div class="card">
-      <div class="card-title">Branches (OR filter)</div>
+      <div class="card-title">Branches (OR filter) · click to toggle</div>
       <div class="pills">
-        <label class="pill-chk on" id="pill-cse"><input type="checkbox" id="branchCSE" checked /> CSE</label>
-        <label class="pill-chk on" id="pill-aiml"><input type="checkbox" id="branchAIML" checked /> AIML</label>
-        <label class="pill-chk on" id="pill-ece"><input type="checkbox" id="branchECE" checked /> ECE</label>
+        <label class="pill-chk" id="pill-cse"><input type="checkbox" id="branchCSE" checked /> CSE</label>
+        <label class="pill-chk" id="pill-it"><input type="checkbox" id="branchIT" checked /> IT</label>
+        <label class="pill-chk" id="pill-aiml"><input type="checkbox" id="branchAIML" checked /> AIML</label>
+        <label class="pill-chk" id="pill-mc"><input type="checkbox" id="branchMC" checked /> M&amp;C</label>
+        <label class="pill-chk" id="pill-ece"><input type="checkbox" id="branchECE" checked /> ECE</label>
+        <label class="pill-chk" id="pill-eee"><input type="checkbox" id="branchEEE" /> EEE</label>
+        <label class="pill-chk" id="pill-me"><input type="checkbox" id="branchME" /> ME</label>
+        <label class="pill-chk" id="pill-ce"><input type="checkbox" id="branchCE" /> CE</label>
+        <label class="pill-chk" id="pill-chem"><input type="checkbox" id="branchCHEM" /> CHEM</label>
+        <label class="pill-chk" id="pill-bt"><input type="checkbox" id="branchBT" /> BT</label>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button type="button" id="branchAll" class="btn-mini" style="padding:5px 10px;">Select all</button>
+        <button type="button" id="branchNone" class="btn-mini" style="padding:5px 10px;">Clear</button>
       </div>
     </div>
 
@@ -191,11 +202,33 @@
       apply();
       i.addEventListener("change", apply);
     }
-    mirror("pill-cse", "branchCSE");
-    mirror("pill-aiml", "branchAIML");
-    mirror("pill-ece", "branchECE");
+    const BRANCH_IDS = [
+      ["pill-cse", "branchCSE"],
+      ["pill-it", "branchIT"],
+      ["pill-aiml", "branchAIML"],
+      ["pill-mc", "branchMC"],
+      ["pill-ece", "branchECE"],
+      ["pill-eee", "branchEEE"],
+      ["pill-me", "branchME"],
+      ["pill-ce", "branchCE"],
+      ["pill-chem", "branchCHEM"],
+      ["pill-bt", "branchBT"],
+    ];
+    BRANCH_IDS.forEach(([p, i]) => mirror(p, i));
     mirror("sw-results", "fetchResults");
     mirror("sw-ai", "useAI");
+    document.getElementById("branchAll").addEventListener("click", () => {
+      BRANCH_IDS.forEach(([, i]) => {
+        const el = document.getElementById(i);
+        el.checked = true; el.dispatchEvent(new Event("change"));
+      });
+    });
+    document.getElementById("branchNone").addEventListener("click", () => {
+      BRANCH_IDS.forEach(([, i]) => {
+        const el = document.getElementById(i);
+        el.checked = false; el.dispatchEvent(new Event("change"));
+      });
+    });
   </script>
   <script src="popup.js"></script>
 </body>

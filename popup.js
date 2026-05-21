@@ -31,8 +31,15 @@ async function buildOptions() {
   return {
     branches: {
       CSE: document.getElementById("branchCSE").checked,
+      IT: document.getElementById("branchIT").checked,
       AIML: document.getElementById("branchAIML").checked,
+      MC: document.getElementById("branchMC").checked,
       ECE: document.getElementById("branchECE").checked,
+      EEE: document.getElementById("branchEEE").checked,
+      ME: document.getElementById("branchME").checked,
+      CE: document.getElementById("branchCE").checked,
+      CHEM: document.getElementById("branchCHEM").checked,
+      BT: document.getElementById("branchBT").checked,
     },
     fetchResults: document.getElementById("fetchResults").checked,
     useAI: useAI && !!groqApiKey,
