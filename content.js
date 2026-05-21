@@ -28,24 +28,21 @@
 
   function extractCurrentPage(table) {
     if (!table) return [];
+    // IMPORTANT: use textContent (works on hidden rows too). innerText returns
+    // "" for display:none rows, so DataTables-paginated tables would lose
+    // 90% of their data. Anchors' href attributes are readable regardless.
     const bodyRows = table.querySelectorAll("tbody tr").length
       ? Array.from(table.querySelectorAll("tbody tr"))
       : Array.from(table.querySelectorAll("tr")).slice(1);
 
     return bodyRows
       .map((tr) => {
-        // Skip rows hidden via CSS (DataTables pagination uses display:none).
-        if (tr.offsetParent === null && !tr.hidden) {
-          // offsetParent null in some cases isn't conclusive; double-check style
-          const style = window.getComputedStyle(tr);
-          if (style.display === "none" || style.visibility === "hidden") return null;
-        }
         const cells = Array.from(tr.querySelectorAll("td"));
         if (cells.length < 2) return null;
-        const company = (cells[0].innerText || "").trim();
+        const company = (cells[0].textContent || "").trim();
         if (!company) return null;
-        const deadline = cells[1] ? (cells[1].innerText || "").trim() : "";
-        const postedOn = cells[2] ? (cells[2].innerText || "").trim() : "";
+        const deadline = cells[1] ? (cells[1].textContent || "").trim() : "";
+        const postedOn = cells[2] ? (cells[2].textContent || "").trim() : "";
 
         let viewApplyUrl = null;
         let updatesUrl = null;
@@ -400,14 +397,18 @@
   }
 
   // ---------- Fetch helpers ----------
-  async function fetchHTML(url) {
+  // Retries transient failures (network / 5xx) up to 2 times with backoff.
+  async function fetchHTML(url, retries = 2) {
     if (!url) return null;
-    try {
-      const res = await fetch(url, { credentials: "same-origin" });
-      return res.ok ? await res.text() : null;
-    } catch {
-      return null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await fetch(url, { credentials: "same-origin" });
+        if (res.ok) return await res.text();
+        if (res.status >= 400 && res.status < 500) return null; // permanent
+      } catch { /* network blip, retry */ }
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
     }
+    return null;
   }
 
   async function withLimit(items, limit, worker, label) {
@@ -606,9 +607,9 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     const noticeURLs = dashboardRows.map((r) => r.updatesUrl);
 
     const [detailHTMLs, noticeHTMLs] = await Promise.all([
-      withLimit(detailURLs, 6, fetchHTML, "Detail"),
+      withLimit(detailURLs, 8, fetchHTML, "Detail"),
       options.fetchResults
-        ? withLimit(noticeURLs, 6, fetchHTML, "Notice")
+        ? withLimit(noticeURLs, 8, fetchHTML, "Notice")
         : Promise.resolve(new Array(noticeURLs.length).fill(null)),
     ]);
 
@@ -646,7 +647,7 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       });
 
       setProgress(`Fetching ${finalUrls.filter(Boolean).length} final-round result pages...`);
-      const resultHTMLs = await withLimit(finalUrls, 6, fetchHTML, "Results");
+      const resultHTMLs = await withLimit(finalUrls, 8, fetchHTML, "Results");
 
       branchFiltered.forEach((row, i) => {
         if (!resultHTMLs[i]) {

@@ -20,11 +20,16 @@ function compInLPA(r) {
 }
 
 function payDisplay(r) {
-  // Show the source format the company posted, with the computed annual in parens
-  // when source was a monthly stipend (so users can compare apples-to-apples).
+  // Always show the parsed annualCTCDisplay (e.g. "₹8.00 LPA") when available.
+  // For monthly stipends, prepend the per-month figure so users see both.
+  if (r.compSource === "stipendx12" && r.stipendUG) {
+    return `₹${r.stipendUG}/mo · ${r.annualCTCDisplay || ""}`.trim();
+  }
+  if (r.annualCTCDisplay) return r.annualCTCDisplay;
+  // Fallbacks if parser had no luck.
   if (r.ctc) return r.ctc;
   if (r.basePay) return r.basePay;
-  if (r.stipendUG) return `₹${r.stipendUG}/mo  ·  ${r.annualCTCDisplay || ""}`.trim();
+  if (r.stipendUG) return `₹${r.stipendUG}/mo`;
   return "—";
 }
 
@@ -156,22 +161,30 @@ function parseDeadline(s) {
 }
 
 function selectedBadge(r) {
-  const n = r.selectedCount || 0;
-  const cls = n === 0 ? "sel-corner zero" : "sel-corner";
-  const label = n === 0 ? "0 selected" : `✓ ${n} selected`;
-  return `<span class="${cls}" title="Final-round selected candidates">${label}</span>`;
+  // Hide entirely when 0 — keeps the card clean. Cards without a badge
+  // also won't have the extra top-padding (via .has-sel class).
+  if (!r.selectedCount || r.selectedCount <= 0) return "";
+  return `<span class="sel-corner" title="Final-round selected candidates">✓ ${r.selectedCount} selected</span>`;
+}
+
+function formatCGPA(s) {
+  if (!s) return null;
+  // Strip non-numeric chars ("7 cg" → "7", "7.0CG" → "7.0").
+  const cleaned = String(s).replace(/[^\d.]/g, "");
+  const n = parseFloat(cleaned);
+  if (isNaN(n) || n <= 0 || n > 10) return null;
+  return n.toFixed(2);
 }
 
 function cgpaCardDisplay(r) {
-  // Returns inline-html-safe string.
-  if (r.cgpaSame && r.cgpaCirc) {
-    return `<strong>${escapeHtml(r.cgpaCirc)}</strong> (circuital = non-circuital)`;
+  const circ = formatCGPA(r.cgpaCirc);
+  const nonCirc = formatCGPA(r.cgpaNonCirc);
+  // Always show both labels separately, per user request.
+  if (circ && nonCirc) {
+    return `Circuital <strong>${circ}</strong> · Non-circuital <strong>${nonCirc}</strong>`;
   }
-  if (r.cgpaCirc && r.cgpaNonCirc && r.cgpaCirc !== r.cgpaNonCirc) {
-    return `Circ <strong>${escapeHtml(r.cgpaCirc)}</strong> · Non-circ <strong>${escapeHtml(r.cgpaNonCirc)}</strong>`;
-  }
-  if (r.cgpaCirc) return `Circuital <strong>${escapeHtml(r.cgpaCirc)}</strong>`;
-  if (r.cgpaNonCirc) return `Non-circ <strong>${escapeHtml(r.cgpaNonCirc)}</strong>`;
+  if (circ) return `Circuital <strong>${circ}</strong>`;
+  if (nonCirc) return `Non-circuital <strong>${nonCirc}</strong>`;
   if (r.criteriaUG) return escapeHtml(r.criteriaUG.slice(0, 80));
   return "";
 }
@@ -249,7 +262,8 @@ function cardHTML(r, idx) {
   infoRows.push(`<div class="info-row" data-key="selected"><span class="ilabel">Selected</span><span class="ival">${r.selectedCount ? `<strong>${r.selectedCount}</strong> · ${escapeHtml(r.selectedByBranch || "—")}` : '<span class="empty">no final result yet</span>'}</span></div>`);
   if (r.skillSet) infoRows.push(`<div class="info-row" data-key="skills"><span class="ilabel">Skills</span><span class="ival">${escapeHtml(r.skillSet)}</span></div>`);
 
-  return `<div class="card" data-idx="${idx}">
+  const cardClass = (r.selectedCount && r.selectedCount > 0) ? "card has-sel" : "card";
+  return `<div class="${cardClass}" data-idx="${idx}">
     ${selectedBadge(r)}
     <div class="card-head">
       <span class="name">${escapeHtml(r.company)}</span>
