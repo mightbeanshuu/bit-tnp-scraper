@@ -378,23 +378,44 @@
   }
 
   // ---------- Compensation ----------
-  // parseAnnualPay handles CTC/basePay strings with units (LPA / Lakh / Cr).
-  // Bare numbers >= 100000 are assumed already-in-rupees; smaller bare numbers
-  // are assumed to be lakhs.
+  // parseAnnualPay handles CTC/basePay strings.
+  // SAFETY: we only accept values that have an explicit unit (LPA/Lakh/Cr),
+  // OR are clearly tiny (<100 → lakhs, e.g. "12" → 12 LPA),
+  // OR are clearly large (>=1L → rupees, e.g. "1200000" → 12 LPA).
+  // Ambiguous middle-range numbers (100…99,999) are dropped — they are usually
+  // monthly stipends mislabeled as CTC and would otherwise produce absurd
+  // values like the 25,000 LPA bug. Result is also clamped at 5 Cr to catch
+  // any remaining parser weirdness.
+  const MAX_REASONABLE_CTC = 50000000; // ₹5 Cr / 500 LPA — practical ceiling
   function parseAnnualPay(s) {
     if (!s) return null;
     const t = String(s).toLowerCase().replace(/,/g, "").replace(/₹/g, "").trim();
-    let m = t.match(/(\d+(?:\.\d+)?)\s*(lpa|lakh|lac|\bl\b)/);
-    if (m) return parseFloat(m[1]) * 100000;
-    m = t.match(/(\d+(?:\.\d+)?)\s*(cr|crore)/);
-    if (m) return parseFloat(m[1]) * 10000000;
+    const hasPerMonth = /per\s*month|\/mo\b|monthly|p\.?m\.?/.test(t);
+
+    let m = t.match(/(\d+(?:\.\d+)?)\s*(cr|crore)/);
+    if (m) return clamp(parseFloat(m[1]) * 10000000);
+
+    m = t.match(/(\d+(?:\.\d+)?)\s*(lpa|lakhs?|lacs?|\bl\b)/);
+    if (m) return clamp(parseFloat(m[1]) * 100000);
+
     m = t.match(/(\d+(?:\.\d+)?)/);
     if (m) {
       const n = parseFloat(m[1]);
       if (isNaN(n) || n <= 0) return null;
-      return n >= 100000 ? n : n * 100000;
+      if (hasPerMonth) {
+        // "8000 per month" → 96,000/year
+        return clamp(n * 12);
+      }
+      if (n < 100) return clamp(n * 100000);           // "12" → 12 LPA
+      if (n >= 100000) return clamp(n);                 // "1200000" → ₹12L
+      return null;                                       // ambiguous (100…99999) — drop
     }
     return null;
+  }
+  function clamp(v) {
+    if (v == null || !isFinite(v) || v <= 0) return null;
+    if (v > MAX_REASONABLE_CTC) return null;
+    return v;
   }
 
   // parseStipendMonthly handles bare monthly-stipend strings like "8000", "8,000".
@@ -415,7 +436,10 @@
     const bp = parseAnnualPay(row.basePay);
     if (bp != null) return { value: bp, source: "basePay" };
     const stipend = parseStipendMonthly(row.stipendUG);
-    if (stipend != null) return { value: stipend * 12, source: "stipendx12" };
+    if (stipend != null) {
+      const annual = clamp(stipend * 12);
+      if (annual != null) return { value: annual, source: "stipendx12" };
+    }
     return { value: null, source: "unknown" };
   }
 
