@@ -3,65 +3,210 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    body { width: 360px; font-family: -apple-system, sans-serif; padding: 12px; margin: 0; }
-    h1 { font-size: 14px; margin: 0 0 6px; }
-    .hint { color: #666; font-size: 11px; margin-bottom: 8px; }
-    .row { margin: 8px 0; display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
-    button { width: 100%; padding: 10px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; margin-top: 4px; }
-    button:disabled { background: #aaa; cursor: not-allowed; }
-    button.secondary { background: #5f6368; }
-    #status { margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, monospace; }
-    label { font-size: 12px; }
-    select { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
-    .section-title { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }
+    :root {
+      --grad: linear-gradient(135deg, #5a1eb4 0%, #f03c82 55%, #ffb432 100%);
+      --grad-text: linear-gradient(90deg, #5a1eb4, #f03c82, #ffb432);
+      --bg: #fbfaff;
+      --card: #ffffff;
+      --border: #e8e3f3;
+      --text: #1a1a23;
+      --muted: #6c6a78;
+      --ok: #137333;
+      --warn: #c5221f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      width: 380px; font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text); font-size: 13px;
+    }
+
+    .titlebar {
+      padding: 16px 18px 14px;
+      background: var(--grad);
+      color: white;
+    }
+    .titlebar h1 {
+      margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .titlebar .v {
+      font-size: 10px; font-weight: 700; background: rgba(255,255,255,0.22);
+      padding: 2px 7px; border-radius: 999px; letter-spacing: 0.5px;
+    }
+    .titlebar .sub { margin-top: 4px; font-size: 11px; opacity: 0.9; }
+
+    .body { padding: 14px 16px 16px; }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 11px 12px; margin-bottom: 10px;
+    }
+    .card-title {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+    }
+
+    .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+    .pill-chk {
+      cursor: pointer; user-select: none;
+      padding: 6px 12px; border-radius: 999px;
+      background: #f1eef8; color: #5a1eb4; font-weight: 700; font-size: 12px;
+      border: 1.5px solid transparent; transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .pill-chk:hover { background: #ebe5f7; }
+    .pill-chk input { display: none; }
+    .pill-chk.on {
+      background: var(--grad); color: white; border-color: transparent;
+      box-shadow: 0 2px 6px rgba(90, 30, 180, 0.25);
+    }
+
+    .range-row { display: flex; gap: 10px; }
+    .range-row label { flex: 1; font-size: 11px; color: var(--muted); font-weight: 600; }
+    .range-row input {
+      width: 100%; margin-top: 4px; padding: 7px 9px;
+      border: 1px solid var(--border); border-radius: 7px; font-size: 12px;
+      outline: none; transition: border-color 0.15s;
+    }
+    .range-row input:focus { border-color: #5a1eb4; }
+
+    .select { width: 100%; padding: 8px 9px; border: 1px solid var(--border);
+      border-radius: 7px; font-size: 12px; background: white; outline: none; }
+    .select:focus { border-color: #5a1eb4; }
+
+    .toggle-row {
+      display: flex; align-items: center; gap: 9px;
+      padding: 6px 0; font-size: 12px;
+    }
+    .toggle-row + .toggle-row { border-top: 1px dashed var(--border); }
+    .switch {
+      position: relative; width: 32px; height: 18px; flex-shrink: 0;
+      background: #e0dceb; border-radius: 999px; transition: background 0.18s;
+      cursor: pointer;
+    }
+    .switch::after {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+      transition: left 0.18s;
+    }
+    .switch input { display: none; }
+    .switch.on { background: linear-gradient(135deg, #5a1eb4, #f03c82); }
+    .switch.on::after { left: 16px; }
+    .toggle-row .text { flex: 1; line-height: 1.35; }
+    .toggle-row .text small { display: block; color: var(--muted); font-size: 10.5px; margin-top: 1px; }
+
+    button {
+      width: 100%; padding: 11px 14px; border: none; border-radius: 9px;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+      transition: transform 0.08s ease, box-shadow 0.15s ease, opacity 0.15s;
+    }
+    button:active { transform: scale(0.98); }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+    .btn-primary {
+      background: var(--grad); color: white; margin-top: 4px;
+      box-shadow: 0 3px 10px rgba(90, 30, 180, 0.25);
+    }
+    .btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(90, 30, 180, 0.35); }
+    .btn-viewer {
+      background: white; color: #5a1eb4; margin-top: 8px;
+      border: 1.5px solid #5a1eb4;
+    }
+    .btn-viewer:hover:not(:disabled) { background: #faf6ff; }
+    .btn-mini {
+      flex: 1; padding: 8px 10px; font-size: 11.5px; font-weight: 600;
+      background: #f1eef8; color: #5a1eb4;
+    }
+    .btn-mini:hover:not(:disabled) { background: #ebe5f7; }
+    .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+
+    #status {
+      margin-top: 12px; padding: 10px 12px;
+      background: #1a1a23; color: #e6e4f0; font-size: 11px;
+      border-radius: 9px; max-height: 180px; overflow-y: auto;
+      white-space: pre-wrap; font-family: ui-monospace, "SF Mono", monospace;
+      line-height: 1.45;
+    }
+    #status:empty { display: none; }
+    .ai-state.ok { color: var(--ok); }
+    .ai-state.bad { color: var(--warn); }
   </style>
 </head>
 <body>
-  <h1>JUST TNP Scraper</h1>
-  <div class="hint">Open the Recent Jobs page on tp.bitmesra.co.in with Placement Year = 2025-26, then click Scrape. The scraper walks all 15 paginated pages automatically.</div>
-
-  <div class="section-title">Branches (OR filter)</div>
-  <div class="row">
-    <label><input type="checkbox" id="branchCSE" checked /> CSE</label>
-    <label><input type="checkbox" id="branchAIML" checked /> AIML</label>
-    <label><input type="checkbox" id="branchECE" checked /> ECE</label>
+  <div class="titlebar">
+    <h1>✦ JUST TNP Scraper <span class="v">v2.0.0</span></h1>
+    <div class="sub">tp.bitmesra.co.in · paginated scrape · viewer + AI insights</div>
   </div>
 
-  <div class="section-title">CTC range (LPA)</div>
-  <div class="row">
-    <label style="flex:1;">Min
-      <input type="number" id="minCTC" min="0" step="0.5" placeholder="0" style="width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;" />
-    </label>
-    <label style="flex:1;">Max
-      <input type="number" id="maxCTC" min="0" step="0.5" placeholder="any" style="width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;" />
-    </label>
+  <div class="body">
+
+    <div class="card">
+      <div class="card-title">Branches (OR filter)</div>
+      <div class="pills">
+        <label class="pill-chk on" id="pill-cse"><input type="checkbox" id="branchCSE" checked /> CSE</label>
+        <label class="pill-chk on" id="pill-aiml"><input type="checkbox" id="branchAIML" checked /> AIML</label>
+        <label class="pill-chk on" id="pill-ece"><input type="checkbox" id="branchECE" checked /> ECE</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">CTC range (LPA) · monthly stipend annualised ×12</div>
+      <div class="range-row">
+        <label>Min<input type="number" id="minCTC" min="0" step="0.5" placeholder="0" /></label>
+        <label>Max<input type="number" id="maxCTC" min="0" step="0.5" placeholder="any" /></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Output format (kept for compatibility — Viewer is preferred)</div>
+      <select id="format" class="select">
+        <option value="none" selected>None — use Viewer only</option>
+        <option value="xlsx">Also download Excel (.xlsx)</option>
+        <option value="csv">Also download CSV</option>
+        <option value="pdf">Also download PDF (compact)</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Options</div>
+      <label class="toggle-row" id="row-results">
+        <span class="switch on" id="sw-results"><input type="checkbox" id="fetchResults" checked /></span>
+        <span class="text">Include final-round selected candidates <small>Adds ~1 min per 150 companies</small></span>
+      </label>
+      <label class="toggle-row" id="row-ai">
+        <span class="switch" id="sw-ai"><input type="checkbox" id="useAI" /></span>
+        <span class="text">AI enrichment (Groq) <small><span id="aiStatus" class="ai-state"></span></small></span>
+      </label>
+    </div>
+
+    <button id="scrapeBtn" class="btn-primary">⚡ Scrape now</button>
+    <button id="viewerBtn" class="btn-viewer">📊 Open Viewer ↗</button>
+
+    <div class="btn-row">
+      <button id="inspectBtn" class="btn-mini">Inspect DOM</button>
+      <button id="settingsBtn" class="btn-mini">Settings</button>
+    </div>
+
+    <div id="status"></div>
   </div>
-  <div class="hint" style="color:#666;font-size:10px;">For internships, monthly stipend is annualised (×12) for comparison. Leave blank for no limit.</div>
 
-  <div class="section-title">Output format</div>
-  <div class="row">
-    <select id="format">
-      <option value="xlsx" selected>Excel (.xlsx)</option>
-      <option value="csv">CSV</option>
-      <option value="pdf">PDF (compact, print-ready)</option>
-    </select>
-  </div>
-
-  <div class="section-title">Options</div>
-  <div class="row">
-    <label><input type="checkbox" id="fetchResults" checked /> Include final-round selected candidates (slower)</label>
-  </div>
-  <div class="row">
-    <label><input type="checkbox" id="useAI" /> Use AI enrichment (Groq) <span id="aiStatus" style="color:#888;"></span></label>
-  </div>
-
-  <button id="scrapeBtn">Scrape now</button>
-  <button id="viewerBtn" style="background: linear-gradient(135deg,#5a1eb4,#f03c82,#ffb432); margin-top:6px;">Open Viewer ↗</button>
-  <button id="inspectBtn" class="secondary">Inspect DOM (debug)</button>
-  <button id="settingsBtn" class="secondary">Open Settings</button>
-
-  <div id="status">Ready.</div>
-
+  <script>
+    // Pills and switches are wrapped in <label>, so native label behavior
+    // toggles the checkbox. We only mirror the checked state on the visual element.
+    function mirror(visualId, inputId) {
+      const v = document.getElementById(visualId);
+      const i = document.getElementById(inputId);
+      const apply = () => v.classList.toggle("on", i.checked);
+      apply();
+      i.addEventListener("change", apply);
+    }
+    mirror("pill-cse", "branchCSE");
+    mirror("pill-aiml", "branchAIML");
+    mirror("pill-ece", "branchECE");
+    mirror("sw-results", "fetchResults");
+    mirror("sw-ai", "useAI");
+  </script>
   <script src="popup.js"></script>
 </body>
 </html>
