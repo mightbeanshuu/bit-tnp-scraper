@@ -8,12 +8,14 @@
     "https://tp.bitmesra.co.in/*",
     "http://tp.bitmesra.co.in/*",
     "https://*.bitmesra.co.in/*",
-    "https://*.bitmesra.ac.in/*"
+    "https://*.bitmesra.ac.in/*",
+    "https://api.groq.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "BIT TNP Scraper"
   },
+  "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
   },

@@ -5,6 +5,7 @@ const COLUMNS = [
   ["Company", "company"],
   ["Type", "type"],
   ["Designation", "designation"],
+  ["AI Summary", "jdSummary"],
   ["Job Description", "jobDescription"],
   ["Place of Posting", "placeOfPosting"],
   ["Eligible Courses", "courses"],
@@ -46,7 +47,9 @@ async function injectContent(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
 }
 
-function buildOptions() {
+async function buildOptions() {
+  const { groqApiKey, groqModel } = await chrome.storage.local.get(["groqApiKey", "groqModel"]);
+  const useAI = document.getElementById("useAI").checked;
   return {
     branches: {
       CSE: document.getElementById("branchCSE").checked,
@@ -55,8 +58,27 @@ function buildOptions() {
     },
     fetchResults: document.getElementById("fetchResults").checked,
     format: document.getElementById("format").value,
+    useAI: useAI && !!groqApiKey,
+    apiKey: useAI ? (groqApiKey || "") : "",
+    model: groqModel || "llama-3.1-8b-instant",
   };
 }
+
+(async () => {
+  const { groqApiKey } = await chrome.storage.local.get("groqApiKey");
+  const aiStatus = document.getElementById("aiStatus");
+  if (groqApiKey) {
+    aiStatus.textContent = "(key set)";
+    aiStatus.style.color = "#137333";
+  } else {
+    aiStatus.textContent = "(no key — open Settings)";
+    aiStatus.style.color = "#c5221f";
+  }
+})();
+
+document.getElementById("settingsBtn").addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
+});
 
 // ---------- CSV ----------
 function csvEscape(s) {
@@ -285,7 +307,8 @@ scrapeBtn.addEventListener("click", async () => {
     if (!tab?.url?.includes("bitmesra")) log("Warning: active tab is not bitmesra. Continuing.");
     await injectContent(tab.id);
 
-    const opts = buildOptions();
+    const opts = await buildOptions();
+    if (opts.useAI) log("AI enrichment: ON (Groq " + opts.model + ")");
     let last = "";
     pollHandle = setInterval(async () => {
       try {

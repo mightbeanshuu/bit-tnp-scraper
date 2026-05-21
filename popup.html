@@ -40,9 +40,13 @@
   <div class="row">
     <label><input type="checkbox" id="fetchResults" checked /> Include final-round selected candidates (slower)</label>
   </div>
+  <div class="row">
+    <label><input type="checkbox" id="useAI" /> Use AI enrichment (Groq) <span id="aiStatus" style="color:#888;"></span></label>
+  </div>
 
   <button id="scrapeBtn">Scrape now</button>
   <button id="inspectBtn" class="secondary">Inspect DOM (debug)</button>
+  <button id="settingsBtn" class="secondary">Open Settings</button>
 
   <div id="status">Ready.</div>
 

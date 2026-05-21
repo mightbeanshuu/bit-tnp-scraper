@@ -403,6 +403,72 @@
     return Infinity;
   }
 
+  // ---------- AI enrichment (Groq) ----------
+  const GROQ_PROMPT = `You will receive the text of a BIT Mesra job/internship posting. Extract structured info and return ONLY a JSON object with these keys (use null for missing):
+{
+  "designation": string|null,
+  "jdSummary": string|null,                // one short sentence
+  "cgpaCutoff": string|null,               // e.g. "7.0", "6.5"
+  "branches": string|null,                 // comma-separated, e.g. "CSE, ECE, IT"
+  "stipendUG": number|null,                // INR per month
+  "stipendPG": number|null,
+  "ctc": string|null,                      // with unit, e.g. "12 LPA"
+  "basePay": string|null,
+  "placeOfPosting": string|null,
+  "type": string|null                       // "Internship" | "Full-Time" | "Both"
+}
+Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
+
+  async function enrichWithGroq(bodyText, apiKey, model) {
+    if (!apiKey || !bodyText) return null;
+    const content = bodyText.slice(0, 6000);
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + apiKey,
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: GROQ_PROMPT },
+            { role: "user", content },
+          ],
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const raw = data?.choices?.[0]?.message?.content;
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  function mergeAIIntoRow(row, ai) {
+    if (!ai || typeof ai !== "object") return row;
+    // Prefer AI for missing-or-empty fields; trust regex when both exist.
+    const useAI = (regex, aiVal) => (regex && String(regex).trim()) ? regex : (aiVal ?? "");
+    row.designation = useAI(row.designation, ai.designation);
+    row.placeOfPosting = useAI(row.placeOfPosting, ai.placeOfPosting);
+    row.ctc = useAI(row.ctc, ai.ctc);
+    row.basePay = useAI(row.basePay, ai.basePay);
+    if (!row.stipendUG && ai.stipendUG != null) row.stipendUG = String(ai.stipendUG);
+    if (!row.stipendPG && ai.stipendPG != null) row.stipendPG = String(ai.stipendPG);
+    if (!row.type && ai.type) row.type = ai.type;
+    // AI is the authoritative source for these two if regex didn't get them
+    if ((!row.criteriaUG || !/\d/.test(row.criteriaUG)) && ai.cgpaCutoff) {
+      row.criteriaUG = (row.criteriaUG ? row.criteriaUG + " | " : "") + "CGPA " + ai.cgpaCutoff;
+    }
+    if (!row.courses && ai.branches) row.courses = ai.branches;
+    if (ai.jdSummary) row.jdSummary = ai.jdSummary;
+    return row;
+  }
+
   // ---------- Main ----------
   window.__BIT_TNP_SCRAPE__ = async function (options) {
     setProgress("Walking dashboard pagination...");
@@ -418,8 +484,21 @@
     );
     const merged = dashboardRows.map((row, i) => {
       const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
-      return { ...row, ...det };
+      return { ...row, ...det, _detailHTML: detailHTMLs[i] || "" };
     });
+
+    if (options.useAI && options.apiKey) {
+      setProgress(`Enriching ${merged.length} rows via Groq (${options.model})...`);
+      await withLimit(merged, 5, async (row) => {
+        if (!row._detailHTML) return null;
+        const doc = new DOMParser().parseFromString(row._detailHTML, "text/html");
+        const text = (doc.body?.innerText || "").replace(/\r/g, "");
+        const ai = await enrichWithGroq(text, options.apiKey, options.model);
+        mergeAIIntoRow(row, ai);
+        return ai;
+      }, "AI enrichment");
+    }
+    merged.forEach((r) => delete r._detailHTML);
 
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 

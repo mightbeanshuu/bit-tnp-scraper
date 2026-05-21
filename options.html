@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>BIT TNP Scraper — Settings</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 560px; margin: 30px auto; padding: 20px; color: #222; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .lead { color: #555; font-size: 13px; margin-bottom: 18px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+    input[type=password], input[type=text], select { width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-family: ui-monospace, monospace; }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row > * { flex: 1; }
+    button { padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 5px; font-size: 13px; cursor: pointer; flex: 0; }
+    button.secondary { background: #5f6368; }
+    .hint { color: #666; font-size: 11px; margin-top: 4px; }
+    .status { margin-top: 18px; padding: 10px; border-radius: 5px; font-size: 12px; }
+    .status.ok { background: #e6f4ea; color: #137333; }
+    .status.warn { background: #fef7e0; color: #b06000; }
+    .status.err { background: #fce8e6; color: #c5221f; }
+  </style>
+</head>
+<body>
+  <h1>BIT TNP Scraper — Settings</h1>
+  <div class="lead">Key is stored in <code>chrome.storage.local</code> on this machine. It is never written to disk and never pushed to GitHub.</div>
+
+  <label for="apiKey">Groq API key</label>
+  <div class="row">
+    <input type="password" id="apiKey" placeholder="gsk_..." autocomplete="off" />
+    <button id="toggle" class="secondary" type="button" style="flex:0;padding:8px 10px;">Show</button>
+  </div>
+  <div class="hint">Paste a key from https://console.groq.com/keys. Used only for the optional AI-enrichment phase. Leave blank to disable.</div>
+
+  <label for="model">Model</label>
+  <select id="model">
+    <option value="llama-3.1-8b-instant" selected>llama-3.1-8b-instant (fast, recommended)</option>
+    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (slower, more accurate)</option>
+  </select>
+
+  <div style="margin-top:18px;display:flex;gap:10px;">
+    <button id="save">Save</button>
+    <button id="clear" class="secondary">Clear key</button>
+  </div>
+
+  <div id="status" class="status" style="display:none;"></div>
+
+  <script src="local-key.js" onerror="window.__LOCAL_KEY_MISSING__=true;"></script>
+  <script src="options.js"></script>
+</body>
+</html>
