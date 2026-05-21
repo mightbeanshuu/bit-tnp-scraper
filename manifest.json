@@ -5,8 +5,9 @@
   "description": "Scrape BIT Mesra TNP portal — filter CSE/AIML/ECE companies, sort by CTC, export to CSV.",
   "permissions": ["activeTab", "scripting", "downloads", "storage"],
   "host_permissions": [
-    "https://tnp.bitmesra.ac.in/*",
-    "http://tnp.bitmesra.ac.in/*",
+    "https://tp.bitmesra.co.in/*",
+    "http://tp.bitmesra.co.in/*",
+    "https://*.bitmesra.co.in/*",
     "https://*.bitmesra.ac.in/*"
   ],
   "action": {
