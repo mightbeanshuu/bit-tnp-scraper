@@ -496,7 +496,7 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     setProgress(`Total companies: ${dashboardRows.length}. Fetching detail pages...`);
     const detailHTMLs = await withLimit(
       dashboardRows.map((r) => r.viewApplyUrl),
-      4, fetchHTML, "Detail pages"
+      6, fetchHTML, "Detail pages"
     );
     const merged = dashboardRows.map((row, i) => {
       const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
@@ -504,9 +504,13 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     });
 
     if (options.useAI && options.apiKey) {
-      setProgress(`Enriching ${merged.length} rows via Groq (${options.model})...`);
-      await withLimit(merged, 5, async (row) => {
-        if (!row._detailHTML) return null;
+      // Skip rows that already have a complete-enough parse (saves API calls).
+      const needsAI = merged.filter((r) =>
+        r._detailHTML && (!r.designation || !r.courses || (!r.ctc && !r.stipendUG && !r.basePay))
+      );
+      const skipped = merged.length - needsAI.length;
+      setProgress(`Enriching ${needsAI.length} rows via Groq (${options.model}); ${skipped} already complete`);
+      await withLimit(needsAI, 6, async (row) => {
         const doc = new DOMParser().parseFromString(row._detailHTML, "text/html");
         const text = (doc.body?.innerText || "").replace(/\r/g, "");
         const ai = await enrichWithGroq(text, options.apiKey, options.model);
@@ -522,7 +526,7 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       setProgress(`Branch-filtered: ${branchFiltered.length}. Fetching notice pages...`);
       const noticeHTMLs = await withLimit(
         branchFiltered.map((r) => r.updatesUrl),
-        4, fetchHTML, "Notice pages"
+        6, fetchHTML, "Notice pages"
       );
 
       const finalUrls = noticeHTMLs.map((html) => {
@@ -532,7 +536,7 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       });
 
       setProgress(`Fetching final result pages...`);
-      const resultHTMLs = await withLimit(finalUrls, 4, fetchHTML, "Result pages");
+      const resultHTMLs = await withLimit(finalUrls, 6, fetchHTML, "Result pages");
 
       branchFiltered.forEach((row, i) => {
         if (!resultHTMLs[i]) {
