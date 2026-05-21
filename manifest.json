@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "BIT TNP Scraper",
+  "version": "1.0.0",
+  "description": "Scrape BIT Mesra TNP portal — filter CSE/AIML/ECE companies, sort by CTC, export to CSV.",
+  "permissions": ["activeTab", "scripting", "downloads", "storage"],
+  "host_permissions": [
+    "https://tnp.bitmesra.ac.in/*",
+    "http://tnp.bitmesra.ac.in/*",
+    "https://*.bitmesra.ac.in/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "BIT TNP Scraper"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
