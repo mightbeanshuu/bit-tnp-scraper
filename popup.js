@@ -1,5 +1,57 @@
-// JUST TNP Scraper — popup script (v2)
+// JUST TNP Scraper — popup script (v2.1)
 // Drives the content script; persists results to chrome.storage.local for the Viewer.
+// NOTE: This file is loaded as an external script per Chrome MV3 CSP (which
+// blocks inline <script> in extension pages). Any DOM wiring that was
+// previously inline in popup.html now lives here.
+
+// ---------- Pill / switch visual mirroring ----------
+function mirrorVisual(visualId, inputId) {
+  const v = document.getElementById(visualId);
+  const i = document.getElementById(inputId);
+  if (!v || !i) return;
+  const apply = () => v.classList.toggle("on", i.checked);
+  apply();
+  i.addEventListener("change", apply);
+}
+const BRANCH_IDS = [
+  ["pill-cse", "branchCSE"],
+  ["pill-it", "branchIT"],
+  ["pill-aiml", "branchAIML"],
+  ["pill-mc", "branchMC"],
+  ["pill-ece", "branchECE"],
+  ["pill-eee", "branchEEE"],
+  ["pill-me", "branchME"],
+  ["pill-ce", "branchCE"],
+  ["pill-chem", "branchCHEM"],
+  ["pill-bt", "branchBT"],
+];
+BRANCH_IDS.forEach(([p, i]) => mirrorVisual(p, i));
+mirrorVisual("sw-results", "fetchResults");
+mirrorVisual("sw-ai", "useAI");
+
+const branchAllBtn = document.getElementById("branchAll");
+const branchNoneBtn = document.getElementById("branchNone");
+if (branchAllBtn) {
+  branchAllBtn.addEventListener("click", () => {
+    BRANCH_IDS.forEach(([, id]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.checked = true;
+      el.dispatchEvent(new Event("change"));
+    });
+  });
+}
+if (branchNoneBtn) {
+  branchNoneBtn.addEventListener("click", () => {
+    BRANCH_IDS.forEach(([, id]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.checked = false;
+      el.dispatchEvent(new Event("change"));
+    });
+  });
+}
+
 
 const statusEl = document.getElementById("status");
 const scrapeBtn = document.getElementById("scrapeBtn");

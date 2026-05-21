@@ -135,7 +135,7 @@
 </head>
 <body>
   <div class="titlebar">
-    <h1>✦ JUST TNP Scraper <span class="v">v2.0.0</span></h1>
+    <h1>✦ JUST TNP Scraper <span class="v">v2.1.0</span></h1>
     <div class="sub">tp.bitmesra.co.in · paginated scrape · viewer + AI insights</div>
   </div>
 
@@ -192,44 +192,6 @@
     <div id="status"></div>
   </div>
 
-  <script>
-    // Pills and switches are wrapped in <label>, so native label behavior
-    // toggles the checkbox. We only mirror the checked state on the visual element.
-    function mirror(visualId, inputId) {
-      const v = document.getElementById(visualId);
-      const i = document.getElementById(inputId);
-      const apply = () => v.classList.toggle("on", i.checked);
-      apply();
-      i.addEventListener("change", apply);
-    }
-    const BRANCH_IDS = [
-      ["pill-cse", "branchCSE"],
-      ["pill-it", "branchIT"],
-      ["pill-aiml", "branchAIML"],
-      ["pill-mc", "branchMC"],
-      ["pill-ece", "branchECE"],
-      ["pill-eee", "branchEEE"],
-      ["pill-me", "branchME"],
-      ["pill-ce", "branchCE"],
-      ["pill-chem", "branchCHEM"],
-      ["pill-bt", "branchBT"],
-    ];
-    BRANCH_IDS.forEach(([p, i]) => mirror(p, i));
-    mirror("sw-results", "fetchResults");
-    mirror("sw-ai", "useAI");
-    document.getElementById("branchAll").addEventListener("click", () => {
-      BRANCH_IDS.forEach(([, i]) => {
-        const el = document.getElementById(i);
-        el.checked = true; el.dispatchEvent(new Event("change"));
-      });
-    });
-    document.getElementById("branchNone").addEventListener("click", () => {
-      BRANCH_IDS.forEach(([, i]) => {
-        const el = document.getElementById(i);
-        el.checked = false; el.dispatchEvent(new Event("change"));
-      });
-    });
-  </script>
   <script src="popup.js"></script>
 </body>
 </html>
