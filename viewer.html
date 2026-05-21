@@ -198,6 +198,28 @@
     .ai-content.empty { color: var(--muted); font-style: italic; }
     .ai-loading { display: inline-block; animation: pulse 1.2s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+    /* Charts */
+    .charts {
+      display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px;
+      margin-top: 14px;
+    }
+    .chart-card {
+      background: white; border: 1px solid var(--border);
+      border-radius: 14px; padding: 14px 18px;
+    }
+    .chart-title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+    }
+    .chart-body { display: flex; align-items: center; gap: 14px; }
+    .chart-body svg { display: block; max-width: 100%; height: auto; }
+    .chart-empty { text-align: center; color: var(--muted); font-style: italic; padding: 30px; font-size: 12px; }
+    .chart-legend { display: flex; gap: 10px 14px; flex-wrap: wrap; font-size: 11px; flex: 1; }
+    .chart-legend .li { display: flex; align-items: center; gap: 6px; }
+    .chart-legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    .chart-legend .lbl { color: #38383f; }
+    .chart-legend .v { color: var(--muted); font-weight: 700; }
   </style>
 </head>
 <body>
@@ -237,6 +259,17 @@
 
   <main>
     <div id="insightsRow" class="insights"></div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <div class="chart-title">CTC distribution (current filter)</div>
+        <div class="chart-body" id="ctcBarChart"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Selected by branch</div>
+        <div class="chart-body" id="branchPieChart"></div>
+      </div>
+    </div>
 
     <div class="ai-panel">
       <div class="ai-panel-head">

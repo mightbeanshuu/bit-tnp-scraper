@@ -215,6 +215,7 @@ function render() {
   lastFiltered = applySort(applyFilters(allRows));
   $("counter").textContent = `${lastFiltered.length} of ${allRows.length}`;
   renderInsightsRow(lastFiltered);
+  renderCharts(lastFiltered);
   const main = $("cards");
   if (lastFiltered.length === 0) {
     main.innerHTML = `<div class="empty">No companies match the current filters. Try widening the CTC range or clearing the search.</div>`;
@@ -245,6 +246,123 @@ function computeStats(rows) {
   const mostHires = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))[0] || null;
 
   return { total, avg, median, topPay, totalSelected, topBranches, mostHires };
+}
+
+// ============== Charts ==============
+const CHART_COLORS = [
+  "#5a1eb4", "#f03c82", "#ffb432", "#1a73e8", "#137333",
+  "#c4365e", "#8a6d00", "#2d8e7f", "#7c52d8", "#e85d04",
+];
+
+function pieSVG(items, size = 160) {
+  const total = items.reduce((s, i) => s + i.value, 0);
+  if (total === 0) return null;
+  const r = size / 2 - 4;
+  const cx = size / 2, cy = size / 2;
+  let angle = -Math.PI / 2;
+  const paths = items.map((it, idx) => {
+    const fraction = it.value / total;
+    if (fraction <= 0) return "";
+    const color = it.color || CHART_COLORS[idx % CHART_COLORS.length];
+    if (fraction >= 0.9999) {
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" />`;
+    }
+    const sweep = fraction * 2 * Math.PI;
+    const x1 = cx + r * Math.cos(angle);
+    const y1 = cy + r * Math.sin(angle);
+    angle += sweep;
+    const x2 = cx + r * Math.cos(angle);
+    const y2 = cy + r * Math.sin(angle);
+    const large = sweep > Math.PI ? 1 : 0;
+    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${color}" />`;
+  }).join("");
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}<circle cx="${cx}" cy="${cy}" r="${r * 0.4}" fill="white"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="14" font-weight="800" fill="#5a1eb4">${total}</text></svg>`;
+}
+
+function legendHTML(items) {
+  return `<div class="chart-legend">${items.map((it, idx) => `
+    <div class="li"><span class="sw" style="background:${it.color || CHART_COLORS[idx % CHART_COLORS.length]}"></span><span class="lbl">${escapeHtml(it.label)}</span><span class="v">${it.value}</span></div>
+  `).join("")}</div>`;
+}
+
+function barChartSVG(items, w = 360, h = 200) {
+  if (items.length === 0 || items.every((i) => i.value === 0)) return null;
+  const max = Math.max(...items.map((i) => i.value)) || 1;
+  const padL = 24, padR = 8, padT = 18, padB = 32;
+  const chartW = w - padL - padR;
+  const chartH = h - padT - padB;
+  const gap = 8;
+  const barW = Math.max(8, (chartW - gap * (items.length - 1)) / items.length);
+  const bars = items.map((it, idx) => {
+    const x = padL + idx * (barW + gap);
+    const barH = (it.value / max) * chartH;
+    const y = padT + chartH - barH;
+    return `
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2, barH).toFixed(1)}" fill="url(#barGrad)" rx="5"/>
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" font-size="11" fill="#3a3a44" font-weight="700">${it.value}</text>
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(padT + chartH + 18).toFixed(1)}" text-anchor="middle" font-size="10" fill="#6c6a78">${escapeHtml(it.label)}</text>
+    `;
+  }).join("");
+  return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#5a1eb4"/>
+        <stop offset="60%" stop-color="#f03c82"/>
+        <stop offset="100%" stop-color="#ffb432"/>
+      </linearGradient>
+    </defs>
+    <line x1="${padL}" y1="${padT + chartH}" x2="${padL + chartW}" y2="${padT + chartH}" stroke="#e8e3f3"/>
+    ${bars}
+  </svg>`;
+}
+
+function buildCTCBuckets(rows) {
+  const bs = [
+    { label: "<3L", min: 0, max: 3 },
+    { label: "3-6L", min: 3, max: 6 },
+    { label: "6-10L", min: 6, max: 10 },
+    { label: "10-20L", min: 10, max: 20 },
+    { label: "20-40L", min: 20, max: 40 },
+    { label: "40L+", min: 40, max: Infinity },
+  ];
+  return bs.map((b) => ({
+    label: b.label,
+    value: rows.filter((r) => {
+      const lpa = r.annualCTC ? r.annualCTC / 100000 : null;
+      return lpa != null && lpa >= b.min && lpa < b.max;
+    }).length,
+  }));
+}
+
+function buildBranchPie(rows) {
+  const tally = {};
+  rows.forEach((r) => {
+    (r.selectedByBranch || "").split(",").forEach((s) => {
+      const m = s.trim().match(/^(.+):\s*(\d+)$/);
+      if (!m) return;
+      const key = m[1].trim().slice(0, 18);
+      tally[key] = (tally[key] || 0) + parseInt(m[2]);
+    });
+  });
+  return Object.entries(tally)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 7)
+    .map(([label, value]) => ({ label, value }));
+}
+
+function renderCharts(rows) {
+  const bars = buildCTCBuckets(rows);
+  const pie = buildBranchPie(rows);
+  const barEl = $("ctcBarChart");
+  const pieEl = $("branchPieChart");
+  const barSvg = barChartSVG(bars);
+  barEl.innerHTML = barSvg || `<div class="chart-empty">No CTC data in the current filter</div>`;
+  if (pie.length === 0) {
+    pieEl.innerHTML = `<div class="chart-empty">No selected-candidate data yet. Run a scrape with "Include final-round selected candidates" enabled.</div>`;
+  } else {
+    const svg = pieSVG(pie);
+    pieEl.innerHTML = (svg || "") + legendHTML(pie);
+  }
 }
 
 function renderInsightsRow(rows) {
