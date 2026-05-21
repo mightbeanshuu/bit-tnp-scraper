@@ -50,6 +50,8 @@ async function injectContent(tabId) {
 async function buildOptions() {
   const { groqApiKey, groqModel } = await chrome.storage.local.get(["groqApiKey", "groqModel"]);
   const useAI = document.getElementById("useAI").checked;
+  const minStr = document.getElementById("minCTC").value.trim();
+  const maxStr = document.getElementById("maxCTC").value.trim();
   return {
     branches: {
       CSE: document.getElementById("branchCSE").checked,
@@ -61,7 +63,22 @@ async function buildOptions() {
     useAI: useAI && !!groqApiKey,
     apiKey: useAI ? (groqApiKey || "") : "",
     model: groqModel || "llama-3.1-8b-instant",
+    minCTC: minStr === "" ? null : parseFloat(minStr),
+    maxCTC: maxStr === "" ? null : parseFloat(maxStr),
   };
+}
+
+function filterByCTCRange(rows, minLPA, maxLPA) {
+  if (minLPA == null && maxLPA == null) return rows;
+  const minR = minLPA != null ? minLPA * 100000 : null;
+  const maxR = maxLPA != null ? maxLPA * 100000 : null;
+  return rows.filter((r) => {
+    const v = r._comp;
+    if (v == null || v === Infinity) return false;
+    if (minR != null && v < minR) return false;
+    if (maxR != null && v > maxR) return false;
+    return true;
+  });
 }
 
 (async () => {
@@ -103,28 +120,57 @@ function escapeHtml(s) {
   })[c]);
 }
 
+// PDF uses a compact subset — only what matters at a glance.
+function payDisplay(r) {
+  if (r.ctc) return r.ctc;
+  if (r.basePay) return r.basePay;
+  if (r.stipendUG) return `₹${r.stipendUG}/mo`;
+  return "—";
+}
+
+function selectedDisplay(r) {
+  if (!r.selectedCount) return "—";
+  return `${r.selectedCount} (${r.selectedByBranch || "—"})`;
+}
+
+const PDF_COLUMNS = [
+  ["Company", (r) => r.company],
+  ["Type", (r) => r.type || "—"],
+  ["Role", (r) => r.designation || "—"],
+  ["Summary", (r) => r.jdSummary || ""],
+  ["Eligible", (r) => r.courses || "—"],
+  ["CGPA", (r) => r.criteriaUG || "—"],
+  ["Pay", (r) => payDisplay(r)],
+  ["Selected", (r) => selectedDisplay(r)],
+  ["Deadline", (r) => r.deadline || ""],
+];
+
 function toHTML(rows) {
-  const head = COLUMNS.map(([h]) => `<th>${escapeHtml(h)}</th>`).join("");
+  const head = PDF_COLUMNS.map(([h]) => `<th>${escapeHtml(h)}</th>`).join("");
   const body = rows
-    .map((r) => `<tr>${COLUMNS.map(([, k]) => `<td>${escapeHtml(r[k] ?? "")}</td>`).join("")}</tr>`)
+    .map((r) => `<tr>${PDF_COLUMNS.map(([, fn]) => `<td>${escapeHtml(fn(r) ?? "")}</td>`).join("")}</tr>`)
     .join("");
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BIT TNP — Placement Report</title>
 <style>
-  @page { size: A3 landscape; margin: 10mm; }
-  body { font-family: -apple-system, sans-serif; font-size: 9px; margin: 0; padding: 12px; }
-  h1 { font-size: 16px; margin: 0 0 8px; }
+  @page { size: A4 landscape; margin: 10mm; }
+  body { font-family: -apple-system, sans-serif; font-size: 9.5px; margin: 0; padding: 12px; color: #222; }
+  h1 { font-size: 17px; margin: 0 0 2px; background: linear-gradient(90deg,#5a1eb4,#f03c82,#ffb432); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; }
   .meta { font-size: 10px; color: #555; margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { border: 1px solid #999; padding: 4px 6px; vertical-align: top; text-align: left; word-break: break-word; }
-  th { background: #1a73e8; color: white; font-weight: 600; }
-  tr:nth-child(even) td { background: #f5f5f5; }
-  td { max-width: 220px; }
+  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; text-align: left; }
+  th { background: #5a1eb4; color: white; font-weight: 600; font-size: 10px; }
+  tr:nth-child(even) td { background: #faf7ff; }
+  td.company { font-weight: 600; white-space: nowrap; }
+  td.pay { font-weight: 600; color: #137333; white-space: nowrap; }
+  td.deadline { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .footer { margin-top: 14px; font-size: 9px; color: #888; }
 </style></head>
 <body>
-  <h1>BIT Mesra Campus Recruitment — Filtered Report</h1>
-  <div class="meta">Generated ${new Date().toLocaleString()} · ${rows.length} companies · Sorted by compensation ascending</div>
+  <h1>BIT Mesra TNP — Filtered Placement Report</h1>
+  <div class="meta">Generated ${new Date().toLocaleString()} · ${rows.length} companies · Sorted ascending by compensation</div>
   <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+  <div class="footer">Use Cmd/Ctrl+P → Save as PDF if the print dialog did not open automatically.</div>
   <script>window.addEventListener("load", () => setTimeout(() => window.print(), 400));<\/script>
 </body></html>`;
 }
@@ -331,7 +377,12 @@ scrapeBtn.addEventListener("click", async () => {
     log(`Format: ${opts.format}`);
 
     const stamp = Date.now();
-    const rows = result.rows;
+    let rows = result.rows;
+    const beforeRange = rows.length;
+    rows = filterByCTCRange(rows, opts.minCTC, opts.maxCTC);
+    if (opts.minCTC != null || opts.maxCTC != null) {
+      log(`CTC range filter: ${beforeRange} → ${rows.length} (min=${opts.minCTC ?? "any"} LPA, max=${opts.maxCTC ?? "any"} LPA)`);
+    }
     if (opts.format === "csv") {
       const blob = new Blob([toCSV(rows)], { type: "text/csv" });
       await downloadBlob(blob, `bit-tnp-${stamp}.csv`);
