@@ -155,6 +155,49 @@
     }
 
     .toggle-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+    /* Insights panel */
+    .insights {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px; margin: 14px 0 0;
+    }
+    .stat {
+      background: linear-gradient(135deg, rgba(90,30,180,0.06), rgba(240,60,130,0.04));
+      border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+    }
+    .stat .label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); }
+    .stat .value {
+      font-size: 20px; font-weight: 800; margin-top: 4px; line-height: 1.1;
+      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .stat .extra { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    .ai-panel {
+      margin: 14px 0 0; padding: 18px 20px;
+      background: linear-gradient(135deg, rgba(90,30,180,0.05), rgba(255,180,50,0.04));
+      border: 1px solid #ddd2f2; border-radius: 14px; position: relative;
+    }
+    .ai-panel-head { display: flex; justify-content: space-between; align-items: center; }
+    .ai-panel-head h3 {
+      margin: 0; font-size: 14px; font-weight: 800;
+      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .ai-btn {
+      padding: 8px 14px; border: none; border-radius: 8px;
+      background: var(--grad); color: white; font-weight: 700; font-size: 12px;
+      cursor: pointer; box-shadow: 0 2px 8px rgba(90,30,180,0.25);
+      transition: transform 0.08s, box-shadow 0.15s;
+    }
+    .ai-btn:hover { box-shadow: 0 3px 14px rgba(90,30,180,0.4); }
+    .ai-btn:active { transform: scale(0.97); }
+    .ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .ai-content {
+      margin-top: 12px; font-size: 13px; line-height: 1.6; color: #2a2a32;
+      white-space: pre-wrap;
+    }
+    .ai-content.empty { color: var(--muted); font-style: italic; }
+    .ai-loading { display: inline-block; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -192,8 +235,20 @@
     </div>
   </header>
 
-  <main id="cards">
-    <div class="empty">Loading scrape data…</div>
+  <main>
+    <div id="insightsRow" class="insights"></div>
+
+    <div class="ai-panel">
+      <div class="ai-panel-head">
+        <h3>✨ AI Insights</h3>
+        <button class="ai-btn" id="genInsightsBtn">Generate Insights</button>
+      </div>
+      <div class="ai-content empty" id="aiContent">Click "Generate Insights" to ask Groq for trends, standouts, and a recommendation across the filtered companies. Requires a Groq key in Settings.</div>
+    </div>
+
+    <div id="cards" style="margin-top: 20px;">
+      <div class="empty">Loading scrape data…</div>
+    </div>
   </main>
 
   <script src="viewer.js"></script>

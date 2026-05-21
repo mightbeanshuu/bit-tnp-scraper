@@ -214,6 +214,7 @@ let lastFiltered = [];
 function render() {
   lastFiltered = applySort(applyFilters(allRows));
   $("counter").textContent = `${lastFiltered.length} of ${allRows.length}`;
+  renderInsightsRow(lastFiltered);
   const main = $("cards");
   if (lastFiltered.length === 0) {
     main.innerHTML = `<div class="empty">No companies match the current filters. Try widening the CTC range or clearing the search.</div>`;
@@ -221,6 +222,119 @@ function render() {
   }
   main.innerHTML = lastFiltered.map(cardHTML).join("");
 }
+
+// ============== Stats + AI Insights ==============
+
+function computeStats(rows) {
+  const total = rows.length;
+  const ctcs = rows.map((r) => r.annualCTC).filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
+  const avg = ctcs.length ? ctcs.reduce((s, v) => s + v, 0) / ctcs.length : null;
+  const median = ctcs.length ? ctcs[Math.floor(ctcs.length / 2)] : null;
+  const topPay = rows.slice().sort((a, b) => (b.annualCTC || 0) - (a.annualCTC || 0))[0] || null;
+
+  const branchTally = {};
+  let totalSelected = 0;
+  rows.forEach((r) => {
+    if (r.selectedCount) totalSelected += r.selectedCount;
+    (r.selectedByBranch || "").split(",").forEach((s) => {
+      const m = s.trim().match(/^(.+):\s*(\d+)$/);
+      if (m) branchTally[m[1].trim()] = (branchTally[m[1].trim()] || 0) + parseInt(m[2]);
+    });
+  });
+  const topBranches = Object.entries(branchTally).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const mostHires = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))[0] || null;
+
+  return { total, avg, median, topPay, totalSelected, topBranches, mostHires };
+}
+
+function renderInsightsRow(rows) {
+  const s = computeStats(rows);
+  const tile = (label, value, extra = "") => `
+    <div class="stat">
+      <div class="label">${label}</div>
+      <div class="value">${value}</div>
+      ${extra ? `<div class="extra">${extra}</div>` : ""}
+    </div>`;
+  const lpa = (v) => v == null ? "—" : `₹${(v / 100000).toFixed(2)} LPA`;
+  const branchesStr = s.topBranches.length
+    ? s.topBranches.map(([b, n]) => `${b.split(/[\s/]/)[0]}: ${n}`).join(" · ")
+    : "—";
+
+  $("insightsRow").innerHTML = [
+    tile("Companies", String(s.total)),
+    tile("Avg CTC", lpa(s.avg), s.median != null ? `median ${lpa(s.median)}` : ""),
+    tile("Highest paying", s.topPay ? escapeHtml(s.topPay.company) : "—", s.topPay?.annualCTC != null ? lpa(s.topPay.annualCTC) : ""),
+    tile("Total final selects", String(s.totalSelected), s.mostHires?.selectedCount ? `${escapeHtml(s.mostHires.company)} took ${s.mostHires.selectedCount}` : ""),
+    tile("Top branches", branchesStr.length > 40 ? branchesStr.slice(0, 40) + "…" : branchesStr),
+  ].join("");
+}
+
+function buildSummaryForLLM(rows) {
+  const s = computeStats(rows);
+  const lpa = (v) => v == null ? "n/a" : `₹${(v / 100000).toFixed(2)}L`;
+  const topN = rows.slice().sort((a, b) => (b.annualCTC || 0) - (a.annualCTC || 0)).slice(0, 8);
+  const topPayList = topN.map((r) => `- ${r.company} · ${lpa(r.annualCTC)} · ${r.type || ""} · ${r.designation || ""}`).join("\n");
+  const mostList = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))
+    .filter((r) => r.selectedCount).slice(0, 6)
+    .map((r) => `- ${r.company} · ${r.selectedCount} selected · ${r.selectedByBranch || ""}`).join("\n");
+
+  return [
+    `Total companies in current view: ${s.total}.`,
+    `Average annual CTC: ${lpa(s.avg)}; median ${lpa(s.median)}.`,
+    `Total final selects: ${s.totalSelected}.`,
+    `Top-paying companies:\n${topPayList || "—"}`,
+    `Companies with the most final selects:\n${mostList || "—"}`,
+    `Branch-wise selection counts: ${s.topBranches.map(([b, n]) => `${b} ${n}`).join("; ") || "—"}.`,
+  ].join("\n\n");
+}
+
+async function generateAIInsights() {
+  const btn = $("genInsightsBtn");
+  const out = $("aiContent");
+  const { groqApiKey, groqModel } = await chrome.storage.local.get(["groqApiKey", "groqModel"]);
+  if (!groqApiKey) {
+    out.classList.remove("empty");
+    out.textContent = "No Groq key set. Open the extension popup → Settings → paste a key, then retry.";
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Thinking…";
+  out.classList.remove("empty");
+  out.innerHTML = '<span class="ai-loading">Talking to Groq…</span>';
+
+  try {
+    const summary = buildSummaryForLLM(lastFiltered);
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + groqApiKey },
+      body: JSON.stringify({
+        model: groqModel || "llama-3.1-8b-instant",
+        temperature: 0.3,
+        messages: [
+          {
+            role: "system",
+            content: "You are a placement analyst for BIT Mesra students. Given a dataset summary, write a tight 4-6 bullet analysis: standouts in compensation, hiring leaders, branch-wise observations, and one actionable suggestion for a student exploring this list. Use Indian rupee notation (LPA / Lakh). Plain text, no markdown headers, just bullets starting with '•'.",
+          },
+          { role: "user", content: summary },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content || "(empty response)";
+    out.textContent = text;
+  } catch (e) {
+    out.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Regenerate";
+  }
+}
+
+document.getElementById("genInsightsBtn").addEventListener("click", generateAIInsights);
 
 // ============== Export — CSV / XLSX / PDF ==============
 
