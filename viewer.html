@@ -32,12 +32,26 @@
     .controls {
       display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; align-items: center;
     }
-    .controls input[type=text], .controls select {
-      padding: 8px 12px; font-size: 13px; border: 1px solid var(--border);
+    .search-wrap {
+      position: relative; flex: 1; min-width: 280px;
+    }
+    .search-wrap::before {
+      content: "🔍"; position: absolute; left: 12px; top: 50%;
+      transform: translateY(-50%); font-size: 14px; opacity: 0.6; pointer-events: none;
+    }
+    .controls input[type=text] {
+      width: 100%; padding: 11px 14px 11px 36px; font-size: 14px; font-weight: 500;
+      border: 1.5px solid var(--border); border-radius: 10px;
+      background: var(--card); outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .controls input[type=text]:focus {
+      border-color: #5a1eb4; box-shadow: 0 0 0 3px rgba(90,30,180,0.12);
+    }
+    .controls select {
+      padding: 10px 12px; font-size: 13px; border: 1px solid var(--border);
       border-radius: 8px; background: var(--card); outline: none;
     }
-    .controls input[type=text] { min-width: 240px; }
-    .controls input[type=text]:focus, .controls select:focus { border-color: #5a1eb4; }
+    .controls select:focus { border-color: #5a1eb4; }
     .pill {
       background: var(--grad); color: white; padding: 4px 10px;
       border-radius: 999px; font-size: 11px; font-weight: 600;
@@ -228,7 +242,9 @@
     <div class="meta"><span id="stamp">Loading…</span> · <span id="counter">0 of 0</span></div>
 
     <div class="controls">
-      <input type="text" id="search" placeholder="Search company, role, location…" />
+      <div class="search-wrap">
+        <input type="text" id="search" placeholder="Search company, role, location, JD…" autofocus />
+      </div>
       <select id="sort">
         <option value="ctc-asc">Sort: CTC low → high</option>
         <option value="ctc-desc">Sort: CTC high → low</option>

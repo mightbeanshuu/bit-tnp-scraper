@@ -528,14 +528,23 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       return { error: "No dashboard rows found.", rawCount: 0 };
     }
 
-    setProgress(`Total companies: ${dashboardRows.length}. Fetching detail pages...`);
-    const detailHTMLs = await withLimit(
-      dashboardRows.map((r) => r.viewApplyUrl),
-      6, fetchHTML, "Detail pages"
-    );
+    // Parallelise detail + notice fetches — they're independent.
+    // For !fetchResults we skip notice entirely. For fetchResults we pre-fetch
+    // ALL notice pages so the branch-filter pass can read them by index.
+    setProgress(`Fetching ${dashboardRows.length} detail pages${options.fetchResults ? " + notice pages in parallel" : ""}...`);
+    const detailURLs = dashboardRows.map((r) => r.viewApplyUrl);
+    const noticeURLs = dashboardRows.map((r) => r.updatesUrl);
+
+    const [detailHTMLs, noticeHTMLs] = await Promise.all([
+      withLimit(detailURLs, 6, fetchHTML, "Detail"),
+      options.fetchResults
+        ? withLimit(noticeURLs, 6, fetchHTML, "Notice")
+        : Promise.resolve(new Array(noticeURLs.length).fill(null)),
+    ]);
+
     const merged = dashboardRows.map((row, i) => {
       const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
-      return { ...row, ...det, _detailHTML: detailHTMLs[i] || "" };
+      return { ...row, ...det, _detailHTML: detailHTMLs[i] || "", _origIdx: i };
     });
 
     if (options.useAI && options.apiKey) {
@@ -558,20 +567,16 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
     if (options.fetchResults) {
-      setProgress(`Branch-filtered: ${branchFiltered.length}. Fetching notice pages...`);
-      const noticeHTMLs = await withLimit(
-        branchFiltered.map((r) => r.updatesUrl),
-        6, fetchHTML, "Notice pages"
-      );
-
-      const finalUrls = noticeHTMLs.map((html) => {
+      // We already have noticeHTMLs (parallel-fetched above). Pick the final
+      // result link for each branch-filtered row using its original index.
+      const finalUrls = branchFiltered.map((row) => {
+        const html = noticeHTMLs[row._origIdx];
         if (!html) return null;
-        const links = extractResultLinks(html);
-        return pickFinalLink(links)?.url || null;
+        return pickFinalLink(extractResultLinks(html))?.url || null;
       });
 
-      setProgress(`Fetching final result pages...`);
-      const resultHTMLs = await withLimit(finalUrls, 6, fetchHTML, "Result pages");
+      setProgress(`Fetching ${finalUrls.filter(Boolean).length} final-round result pages...`);
+      const resultHTMLs = await withLimit(finalUrls, 6, fetchHTML, "Results");
 
       branchFiltered.forEach((row, i) => {
         if (!resultHTMLs[i]) {
@@ -585,6 +590,7 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
         row.selectedList = agg.list;
       });
     }
+    branchFiltered.forEach((r) => delete r._origIdx);
 
     // Attach explicit annualCTC + source on every row, then sort ascending.
     branchFiltered.forEach((r) => {
