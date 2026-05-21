@@ -50,9 +50,17 @@ The portal's DOM may use slightly different column labels than the defaults. If 
 
 ## How it works
 
-- `content.js` finds the table on the page with the most header matches against `FIELD_PATTERNS`, extracts each row, applies year and branch filters, sorts by parsed CTC, and returns CSV.
-- `popup.js` injects the content script, calls into it, and triggers a download via the `chrome.downloads` API.
-- No data leaves the browser. Nothing is sent to a server.
+- `content.js` reads the dashboard table on `tp.bitmesra.co.in`, extracts each company row plus its `/job/info/<hash>` detail URL.
+- It then fetches each detail page in parallel (5 at a time, same-origin, with the user's session cookies) and parses labelled fields: Job Designation, Job Description, Place of Posting, Stipend UG/PG, CGPA cutoff, Branches Allowed, CTC, Base Pay.
+- Rows are filtered by the selected branches (CSE / AIML / ECE — OR logic) and sorted ascending by compensation (CTC if present, else base pay, else annualised UG stipend).
+- `popup.js` injects the content script, polls progress, and triggers a CSV download via `chrome.downloads`.
+- No data leaves the browser. Nothing is sent to any external server.
+
+## Limitations and caveats
+
+- The "Selected in final HR" column comes from the per-company **Updates** page (`/job/notice/<hash>`) which has a separate structure. The current build does not crawl those yet.
+- The year filter is handled by the portal's own "Placement Year" dropdown — set it to `2025-26` before scraping.
+- The dashboard's "Show N entries" pagination is honoured as-is. Set it to a high number (e.g. 100) before scraping if there are more than 25 listings.
 
 ## Project layout
 

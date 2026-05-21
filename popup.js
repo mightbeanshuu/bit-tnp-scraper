@@ -11,18 +11,17 @@ async function getActiveTab() {
   return tab;
 }
 
-async function runInTab(tabId, func, args) {
-  const [result] = await chrome.scripting.executeScript({
+async function runInTab(tabId, func, args = []) {
+  const [r] = await chrome.scripting.executeScript({
     target: { tabId },
     func,
     args,
   });
-  return result.result;
+  return r.result;
 }
 
 function buildOptions() {
   return {
-    yearFilter: document.getElementById("yearFilter").value.trim(),
     branches: {
       CSE: document.getElementById("branchCSE").checked,
       AIML: document.getElementById("branchAIML").checked,
@@ -31,46 +30,76 @@ function buildOptions() {
   };
 }
 
+async function injectContent(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"],
+  });
+}
+
 scrapeBtn.addEventListener("click", async () => {
   scrapeBtn.disabled = true;
-  log("Scraping...");
+  statusEl.textContent = "";
+  log("Starting scrape...");
+  let pollHandle = null;
   try {
     const tab = await getActiveTab();
     if (!tab?.url?.includes("bitmesra")) {
-      log("WARN: active tab is not a bitmesra URL. Continuing anyway.");
+      log("Warning: active tab is not a bitmesra URL. Continuing.");
     }
-
-    // Inject the scraper and run it.
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["content.js"],
-    });
+    await injectContent(tab.id);
 
     const opts = buildOptions();
-    const result = await runInTab(tab.id, (options) => window.__BIT_TNP_SCRAPE__(options), [opts]);
+
+    // Poll for progress while scrape runs.
+    let lastProgress = "";
+    pollHandle = setInterval(async () => {
+      try {
+        const p = await runInTab(tab.id, () => window.__BIT_TNP_GET_PROGRESS__?.() || "");
+        if (p && p !== lastProgress) {
+          lastProgress = p;
+          log(p);
+        }
+      } catch {
+        // ignore poll errors
+      }
+    }, 600);
+
+    const result = await runInTab(
+      tab.id,
+      (options) => window.__BIT_TNP_SCRAPE__(options),
+      [opts]
+    );
+
+    clearInterval(pollHandle);
+    pollHandle = null;
 
     if (!result) {
-      log("ERROR: scraper returned nothing. Try the Inspect button.");
+      log("ERROR: scraper returned nothing.");
+      return;
+    }
+    if (result.error) {
+      log("ERROR: " + result.error);
       return;
     }
 
-    log(`Found ${result.rawCount} rows on page.`);
-    log(`After year filter (${opts.yearFilter}): ${result.afterYear} rows.`);
-    log(`After branch filter (${Object.keys(opts.branches).filter(k => opts.branches[k]).join("/")}): ${result.afterBranch} rows.`);
-    log(`Sorted by CTC ascending. Triggering CSV download.`);
+    log(`Dashboard rows: ${result.rawCount}`);
+    log(`Detail pages fetched: ${result.detailFetched}`);
+    log(`After branch filter: ${result.afterBranch}`);
+    log("Triggering CSV download...");
 
-    // Trigger CSV download via background.
     const blob = new Blob([result.csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     await chrome.downloads.download({
       url,
-      filename: `bit-tnp-${opts.yearFilter}-${Date.now()}.csv`,
+      filename: `bit-tnp-${Date.now()}.csv`,
       saveAs: true,
     });
   } catch (e) {
     log("ERROR: " + e.message);
     console.error(e);
   } finally {
+    if (pollHandle) clearInterval(pollHandle);
     scrapeBtn.disabled = false;
   }
 });
@@ -78,10 +107,7 @@ scrapeBtn.addEventListener("click", async () => {
 inspectBtn.addEventListener("click", async () => {
   try {
     const tab = await getActiveTab();
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["content.js"],
-    });
+    await injectContent(tab.id);
     const report = await runInTab(tab.id, () => window.__BIT_TNP_INSPECT__());
     log(report);
   } catch (e) {
