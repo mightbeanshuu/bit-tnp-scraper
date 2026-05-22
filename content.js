@@ -239,13 +239,48 @@
   // string so downstream parseAnnualPay can apply unit logic.
   function extractMaxCTC(text) {
     if (!text) return null;
-    const re = /(?:total\s*(?:ctc|package|compensation|comp|pay)|\bctc\b|annual\s*pay|gross\s*(?:ctc|package))[\s\S]{0,15}?(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi;
+    // Two regex passes to keep each pattern simple:
+    // 1) Strong keywords: CTC / Total CTC / Total Package / Annual Pay / Gross CTC.
+    // 2) "Compensation Offered:" / "Compensation:" / "Comp:" — anchored on
+    //    a colon or "offered" suffix to avoid matching bare "compensation"
+    //    in prose like "the compensation is competitive".
+    const patterns = [
+      /(?:total\s*(?:ctc|package|compensation|comp|pay)|\bctc\b|annual\s*pay|gross\s*(?:ctc|package))[\s\S]{0,15}?(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi,
+      /\bcompensation\s*(?:offered|package|details)?\s*[:\-]\s*(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi,
+    ];
     let bestText = null, bestValue = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const raw = m[1].trim().replace(/\s+/g, " ");
-      const v = parseAnnualPay(raw);
-      if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const raw = m[1].trim().replace(/\s+/g, " ");
+        const v = parseAnnualPay(raw);
+        if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
+      }
+    }
+    return bestText;
+  }
+
+  // Extract a bonus / variable / target component (e.g., "+ 2.5 Lakhs Annual
+  // Targeted Bonus", "Variable Pay: 5 L", "Joining Bonus: 2 Lakhs"). Kept
+  // SEPARATE from CTC — most postings already roll the bonus into the main
+  // CTC number, so auto-adding would double-count. The viewer just shows
+  // bonus as its own line so users can read the full breakdown.
+  function extractBonus(text) {
+    if (!text) return null;
+    const patterns = [
+      // "+ 2.5 Lakhs Annual Targeted Bonus" / "+ 5 LPA Variable"
+      /\+\s*(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K))\s*(?:annual|annually|p\.?a\.?|per\s*annum)?\s*(?:target|targeted|bonus|variable|performance|joining|sign|incentive)/gi,
+      // "Variable Pay: 5 L" / "Targeted Bonus: 2.5 Lakhs" / "Joining Bonus: 2L"
+      /(?:variable\s*(?:pay|comp(?:ensation)?)?|target(?:ed)?\s*bonus|annual\s*targeted?\s*bonus|performance\s*bonus|sign[\-\s]*on\s*bonus|joining\s*bonus|incentive)\s*[:\-]\s*(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi,
+    ];
+    let bestText = null, bestValue = 0;
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const raw = m[1].trim().replace(/\s+/g, " ");
+        const v = parseAnnualPay(raw);
+        if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
+      }
     }
     return bestText;
   }
@@ -347,6 +382,8 @@
     const data = {
       type: "", designation: "", jobDescription: "", placeOfPosting: "",
       stipendUG: "", stipendPG: "", basePay: "", ctc: "",
+      ugCTC: "", pgCTC: "", ugBasePay: "", pgBasePay: "",
+      bonus: "",
       courses: "", criteriaUG: "", criteriaPG: "",
       cgpaCirc: "", cgpaNonCirc: "", cgpaSame: false,
       skillSet: "",
@@ -385,11 +422,24 @@
       if (pg) data.stipendPG = pg[1].replace(/,/g, "");
     }
 
-    // First: try the tabular salary layout (used by VISA, DE Shaw, etc. for FTE roles).
+    // First: try the tabular salary layout (used by VISA, Meesho, DE Shaw,
+    // etc. for FTE roles). Store UG/PG values separately so the viewer can
+    // surface them distinctly when they differ — the primary "data.ctc" /
+    // "data.basePay" picks the LARGER of the two (most companies match,
+    // but a few have separate UG vs PG bands and we want sorting to use
+    // the better offer).
     const salaryTable = parseSalaryTable(doc);
     if (salaryTable) {
-      data.ctc = salaryTable.ugCTC || salaryTable.pgCTC || "";
-      data.basePay = salaryTable.ugBasePay || salaryTable.pgBasePay || "";
+      data.ugCTC = salaryTable.ugCTC || "";
+      data.pgCTC = salaryTable.pgCTC || "";
+      data.ugBasePay = salaryTable.ugBasePay || "";
+      data.pgBasePay = salaryTable.pgBasePay || "";
+      const ugCTCval = parseAnnualPay(data.ugCTC) || 0;
+      const pgCTCval = parseAnnualPay(data.pgCTC) || 0;
+      data.ctc = pgCTCval > ugCTCval ? data.pgCTC : (data.ugCTC || data.pgCTC);
+      const ugBPval = parseAnnualPay(data.ugBasePay) || 0;
+      const pgBPval = parseAnnualPay(data.pgBasePay) || 0;
+      data.basePay = pgBPval > ugBPval ? data.pgBasePay : (data.ugBasePay || data.pgBasePay);
     }
 
     // Fallback: free-text scan for inline salary mentions. We scan the
@@ -409,6 +459,14 @@
     if (!data.basePay) {
       const best = extractFixedPay(sText);
       if (best) data.basePay = best;
+    }
+
+    // Bonus / variable / target extraction — separate field, not auto-added
+    // to CTC (most postings already include variable in the total CTC; we
+    // don't want to double-count). Viewer shows it as its own breakdown row.
+    if (!data.bonus) {
+      const bonus = extractBonus(sText);
+      if (bonus) data.bonus = bonus;
     }
 
     const elig = getSection(bodyText, "ELIGIBILITY");

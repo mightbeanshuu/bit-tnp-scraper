@@ -210,18 +210,45 @@ function selectedGridHTML(r) {
   return `<div class="selected-grid">${items.map((it) => `<div>• ${escapeHtml(it)}</div>`).join("")}</div>`;
 }
 
+function compNumeric(s) {
+  if (!s) return 0;
+  // Strip everything but digits, dot — used to detect "are UG and PG different?".
+  const cleaned = String(s).replace(/[^\d.]/g, "");
+  return parseFloat(cleaned) || 0;
+}
+
 function detailsHTML(r) {
   const cgpa = cgpaCardDisplay(r);
   const allCourses = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
   const matchCourses = (r.matchingCourses || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+  // CTC display: if UG and PG values are both set AND differ, show them as
+  // two separate rows. Otherwise collapse to one "CTC" line (the common case).
+  // Same logic for Base Pay.
+  const ctcLines = [];
+  if (r.ugCTC && r.pgCTC && compNumeric(r.ugCTC) !== compNumeric(r.pgCTC)) {
+    ctcLines.push(`<strong>CTC (UG):</strong> ${escapeHtml(r.ugCTC)}`);
+    ctcLines.push(`<strong>CTC (PG):</strong> ${escapeHtml(r.pgCTC)}`);
+  } else if (r.ctc) {
+    ctcLines.push(`<strong>CTC:</strong> ${escapeHtml(r.ctc)}`);
+  }
+  const bpLines = [];
+  if (r.ugBasePay && r.pgBasePay && compNumeric(r.ugBasePay) !== compNumeric(r.pgBasePay)) {
+    bpLines.push(`<strong>Base Pay (UG):</strong> ${escapeHtml(r.ugBasePay)}`);
+    bpLines.push(`<strong>Base Pay (PG):</strong> ${escapeHtml(r.pgBasePay)}`);
+  } else if (r.basePay && compNumeric(r.basePay) > 0) {
+    bpLines.push(`<strong>Base Pay:</strong> ${escapeHtml(r.basePay)}`);
+  }
+
   return `
     ${r.skillSet ? `<h4>Required SkillSet</h4><div class="body">${escapeHtml(r.skillSet)}</div>` : ""}
     ${r.jobDescription ? `<h4>Full Job Description</h4><div class="body">${escapeHtml(r.jobDescription)}</div>` : ""}
-    ${(r.stipendUG || r.stipendPG || r.basePay || r.ctc) ? `
+    ${(r.stipendUG || r.stipendPG || r.basePay || r.ctc || r.bonus) ? `
       <h4>Compensation breakdown</h4>
       <div class="body">${[
-        r.ctc ? `<strong>CTC:</strong> ${escapeHtml(r.ctc)}` : "",
-        r.basePay ? `<strong>Base Pay:</strong> ${escapeHtml(r.basePay)}` : "",
+        ...ctcLines,
+        ...bpLines,
+        r.bonus ? `<strong>Bonus / Variable:</strong> ${escapeHtml(r.bonus)}` : "",
         r.stipendUG ? `<strong>Stipend UG:</strong> ₹${escapeHtml(r.stipendUG)}/month` : "",
         r.stipendPG ? `<strong>Stipend PG:</strong> ₹${escapeHtml(r.stipendPG)}/month` : "",
         r.annualCTCDisplay ? `<strong>Annual CTC equivalent:</strong> ${escapeHtml(r.annualCTCDisplay)}` : "",
@@ -584,7 +611,12 @@ const EXPORT_COLUMNS = [
   ["Stipend UG (₹/mo)", "stipendUG"],
   ["Stipend PG (₹/mo)", "stipendPG"],
   ["Base Pay", "basePay"],
+  ["Base Pay UG", "ugBasePay"],
+  ["Base Pay PG", "pgBasePay"],
   ["CTC", "ctc"],
+  ["CTC UG", "ugCTC"],
+  ["CTC PG", "pgCTC"],
+  ["Bonus / Variable", "bonus"],
   ["Annual CTC (₹)", "annualCTC"],
   ["Annual CTC (display)", "annualCTCDisplay"],
   ["CTC Source", "compSource"],
