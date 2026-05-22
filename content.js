@@ -19,6 +19,13 @@
 // panel-only extractor was reporting 17 selected (actually applicants) and
 // 0 applicants. Label hints ("Initial Short listing", "Final Result") take
 // precedence over the count heuristic when present.
+// v8 (2.6.5): multi-strategy "deep scrape" — Pass 1 scans notice page for
+// known result-URL patterns; Pass 2 deep-dives into sub-notice pages for
+// companies that had no direct match; Pass 3 fetches discovered URLs. Adds
+// parseResultPagePermissive (Tier-3 pattern-only parser) as a fallback when
+// the strict header-based picker rejects a table. Tracks sourcesChecked per
+// row so the viewer can distinguish "no results published yet" from
+// "scraper bug" in the funnel UI.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -717,49 +724,104 @@
     return nonFinal[0];
   }
 
-  // Scrape-time primary extractor: collect EVERY /resultlist/, /result/, or
-  // /selection/ link from the entire notice page (Result panel AND yellow
-  // Notifications section). On some companies (Arcesium being the discovery
-  // case) the Final Result link is published as a Notification entry —
-  // titled "Shortlisted Students for Interview" — NOT as a Result-panel
-  // row. Restricting to the Result panel misses it entirely.
-  //
-  // The scraper fetches every URL collected here and assigns roles by
-  // student-count comparison (smallest = final selected, largest = initial
-  // shortlist applicants). Label hints — explicit "Initial Short listing"
-  // text or "Final Result"/"Final Round" markers — take precedence over
-  // counts when present.
+  // URL patterns that point to student-list pages. Broader than v2.6.4's
+  // /resultlist/ + /result/ + /selection/ to catch /selected/, /finalresult/,
+  // and /shortlist/ paths seen on some companies' notice pages.
+  const RESULT_URL_RE = /\/(?:resultlist|result|selection|selected|finalresult|shortlist)\//i;
+
+  // Scrape-time primary extractor: collect EVERY result-list link from the
+  // entire notice page (Result panel AND yellow Notifications section). On
+  // some companies (Arcesium being the discovery case) the Final Result
+  // link is published as a Notification entry — titled "Shortlisted Students
+  // for Interview" — NOT as a Result-panel row.
   function extractAllResultlistLinks(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const out = [];
     const seen = new Set();
-    doc.querySelectorAll('a[href*="/resultlist/"], a[href*="/result/"], a[href*="/selection/"]')
-      .forEach((a) => {
-        const href = a.getAttribute("href");
-        if (!href || href === "#" || href.startsWith("javascript:")) return;
-        let abs;
-        try { abs = new URL(href, location.origin).href; } catch { return; }
-        if (seen.has(abs)) return;
-        seen.add(abs);
-        const text = (a.textContent || "").trim().slice(0, 200);
-        const parentText = (a.parentElement?.textContent || "").trim().slice(0, 300);
-        const ctx = text + " " + parentText;
-        out.push({
-          url: abs,
-          label: text || parentText,
-          isFinalMarked: detectIsFinal(a),
-          isFinalLabel:
-            /\bfinal\s*(?:result|round|selected|selection|list)\b/i.test(ctx) ||
-            /\bselected\s*candidates?\b/i.test(ctx),
-          // "Initial" must be explicit — the literal word "Initial". Pure
-          // "Shortlist" is too ambiguous (Arcesium's Final Result link is
-          // labeled "Shortlisted Students for Interview").
-          isInitialLabel:
-            /\binitial\s*(?:short|shortlist|listing)/i.test(ctx) ||
-            /\b(?:first|1st)\s*round\b/i.test(ctx),
-        });
+    doc.querySelectorAll('a[href]').forEach((a) => {
+      const href = a.getAttribute("href");
+      if (!href || href === "#" || href.startsWith("javascript:")) return;
+      let abs;
+      try { abs = new URL(href, location.origin).href; } catch { return; }
+      if (!RESULT_URL_RE.test(abs)) return;
+      if (seen.has(abs)) return;
+      seen.add(abs);
+      const text = (a.textContent || "").trim().slice(0, 200);
+      const parentText = (a.parentElement?.textContent || "").trim().slice(0, 300);
+      const ctx = text + " " + parentText;
+      out.push({
+        url: abs,
+        label: text || parentText,
+        isFinalMarked: detectIsFinal(a),
+        isFinalLabel:
+          /\bfinal\s*(?:result|round|selected|selection|list)\b/i.test(ctx) ||
+          /\bselected\s*candidates?\b/i.test(ctx),
+        // "Initial" must be explicit — pure "Shortlist" is ambiguous
+        // (Arcesium's Final Result link is labeled "Shortlisted Students").
+        isInitialLabel:
+          /\binitial\s*(?:short|shortlist|listing)/i.test(ctx) ||
+          /\b(?:first|1st)\s*round\b/i.test(ctx),
       });
+    });
     return out;
+  }
+
+  // Sub-notice extractor: every other /job/notice/ link on the page (the
+  // yellow notification entries). Used in the deep-dive pass when the
+  // notice page itself has no /resultlist/ URLs.
+  function extractSubNoticeUrls(html, excludeUrl) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = new Set();
+    doc.querySelectorAll('a[href*="/job/notice/"]').forEach((a) => {
+      const href = a.getAttribute("href");
+      if (!href) return;
+      try {
+        const abs = new URL(href, location.origin).href;
+        if (abs !== excludeUrl) out.add(abs);
+      } catch {}
+    });
+    return [...out];
+  }
+
+  // Tier-3 permissive parser: no header requirement at all. Scans every <tr>
+  // on the page; treats a row as a student if any cell matches a BIT roll
+  // pattern (BTECH/01234/22) AND any other cell has a name-shaped string
+  // (2+ capitalized words). Last-ditch fallback for layouts where the
+  // strict header-based picker rejects the table entirely.
+  const ROLL_CELL_RE = /^[A-Z]{2,8}[\/\-.][\w\/\-.]{3,}/i;
+  const NAME_CELL_RE = /^[A-Z][a-zA-Z'.\-]+(?:\s+[A-Z][a-zA-Z'.\-]+){1,4}$/;
+  const BRANCH_CELL_RE = /(?:Engineering|Computing|Science|Technology|Mathematics|Physics|Chemistry|Biotech|Architecture)/i;
+
+  function parseResultPagePermissive(html) {
+    if (!html) return [];
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = [];
+    doc.querySelectorAll("tr").forEach((tr) => {
+      const cells = Array.from(tr.querySelectorAll("td")).map((c) => (c.textContent || "").trim());
+      if (cells.length < 2) return;
+      const rollIdx = cells.findIndex((c) => ROLL_CELL_RE.test(c));
+      if (rollIdx < 0) return;
+      const nameIdx = cells.findIndex((c, i) => i !== rollIdx && NAME_CELL_RE.test(c) && c.length <= 60);
+      if (nameIdx < 0) return;
+      const branchIdx = cells.findIndex((c) => BRANCH_CELL_RE.test(c) && c.length <= 100);
+      const degreeIdx = cells.findIndex((c) => /^(BTech|MTech|MSc|MBA|MCA|PhD|IMSc|BArch|BPharm)\b/i.test(c) && c.length < 30);
+      out.push({
+        rollNo: cells[rollIdx],
+        name: cells[nameIdx],
+        degree: degreeIdx >= 0 ? cells[degreeIdx] : "",
+        branch: branchIdx >= 0 ? cells[branchIdx] : "",
+        centre: "",
+      });
+    });
+    return out;
+  }
+
+  // Multi-strategy parser: try strict first, fall back to permissive.
+  // Returns the larger non-empty result.
+  function parseResultPageMulti(html) {
+    const strict = parseResultPage(html);
+    if (strict.length >= 1) return strict;
+    return parseResultPagePermissive(html);
   }
 
   // Some companies announce selects INLINE on the notice page (no separate
@@ -1161,59 +1223,117 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
     if (options.fetchResults) {
-      // Strategy (the user's rule, literally):
-      //   - Applicants = count from Initial Short listing (or first round)
-      //   - Selected   = count from Final Result
-      // The Final Result link sometimes lives in the yellow Notifications
-      // section instead of the green Result panel (Arcesium case). So we
-      // collect EVERY /resultlist/ URL on the notice page, fetch each,
-      // count valid students, then assign roles:
-      //   1) Label-anchored picks first (explicit "Final" / "Initial"
-      //      keywords or red "Final Round" marker).
-      //   2) Count-based fallback — smallest count = final selected, largest
-      //      = initial applicants (in any selection pipeline final ≤ initial).
+      // PASS 1 — direct: scan each company's notice page for result-list URLs,
+      // fetch them, parse with strict-then-permissive multi-parser.
       const linksPerRow = branchFiltered.map((row) => {
         const html = noticeHTMLs[row._origIdx];
         return html ? extractAllResultlistLinks(html) : [];
       });
 
-      const fetchTasks = [];
-      linksPerRow.forEach((links, rowIdx) => {
-        links.forEach((link, linkIdx) => {
-          fetchTasks.push({ url: link.url, rowIdx, linkIdx });
+      const buildTasks = (lists) => {
+        const tasks = [];
+        lists.forEach((links, rowIdx) => {
+          links.forEach((link, linkIdx) => {
+            tasks.push({ url: link.url, rowIdx, linkIdx, meta: link });
+          });
         });
-      });
+        return tasks;
+      };
 
-      setProgress(`Fetching ${fetchTasks.length} result pages across ${branchFiltered.length} companies...`);
-      const fetched = await withLimit(fetchTasks.map((t) => t.url), 8, fetchHTML, "Result pages");
+      const pass1Tasks = buildTasks(linksPerRow);
+      setProgress(`Pass 1: fetching ${pass1Tasks.length} result pages across ${branchFiltered.length} companies...`);
+      const pass1Htmls = await withLimit(pass1Tasks.map((t) => t.url), 8, fetchHTML, "Pass 1");
 
       const parsedByRow = branchFiltered.map(() => []);
-      fetchTasks.forEach((task, i) => {
-        const html = fetched[i];
+      pass1Tasks.forEach((task, i) => {
+        const html = pass1Htmls[i];
         if (!html) return;
         let cands = [];
-        try { cands = parseResultPage(html); }
-        catch (e) { console.warn("parseResultPage failed:", e); }
-        const meta = linksPerRow[task.rowIdx][task.linkIdx];
+        try { cands = parseResultPageMulti(html); }
+        catch (e) { console.warn("parseResultPageMulti failed:", e); }
         parsedByRow[task.rowIdx].push({
           url: task.url,
-          label: meta.label,
+          label: task.meta.label,
           candidates: cands,
           count: cands.length,
-          isFinalMarked: meta.isFinalMarked,
-          isFinalLabel: meta.isFinalLabel,
-          isInitialLabel: meta.isInitialLabel,
+          isFinalMarked: task.meta.isFinalMarked,
+          isFinalLabel: task.meta.isFinalLabel,
+          isInitialLabel: task.meta.isInitialLabel,
         });
       });
 
+      // PASS 2 — deep dive: for rows that found NOTHING in pass 1, fetch
+      // every sub-notice page from the Notifications section and rescan for
+      // result-list URLs inside them. Some companies hide the Final Result
+      // link behind a sub-notice instead of publishing it on the parent.
+      const deepRowIdxs = branchFiltered
+        .map((_, i) => i)
+        .filter((i) => parsedByRow[i].length === 0 && noticeHTMLs[branchFiltered[i]._origIdx]);
+
+      if (deepRowIdxs.length > 0) {
+        setProgress(`Pass 2 (deep dive): scanning sub-notices for ${deepRowIdxs.length} companies with no direct result link...`);
+        const subTasks = []; // { rowIdx, subUrl }
+        deepRowIdxs.forEach((rowIdx) => {
+          const row = branchFiltered[rowIdx];
+          const noticeUrl = row.updatesUrl;
+          const noticeHtml = noticeHTMLs[row._origIdx];
+          const subs = extractSubNoticeUrls(noticeHtml, noticeUrl).slice(0, 6);
+          subs.forEach((subUrl) => subTasks.push({ rowIdx, subUrl }));
+        });
+        const subHtmls = await withLimit(subTasks.map((t) => t.subUrl), 6, fetchHTML, "Sub-notices");
+
+        // Discover /resultlist/ URLs in each sub-notice, dedupe per row.
+        const discoveredByRow = new Map();
+        subTasks.forEach((task, i) => {
+          const h = subHtmls[i];
+          if (!h) return;
+          const links = extractAllResultlistLinks(h);
+          if (!links.length) return;
+          if (!discoveredByRow.has(task.rowIdx)) discoveredByRow.set(task.rowIdx, new Map());
+          const m = discoveredByRow.get(task.rowIdx);
+          links.forEach((l) => { if (!m.has(l.url)) m.set(l.url, l); });
+        });
+
+        // Fetch discovered URLs.
+        const pass3Tasks = [];
+        discoveredByRow.forEach((linkMap, rowIdx) => {
+          linkMap.forEach((meta, url) => pass3Tasks.push({ url, rowIdx, meta }));
+        });
+        if (pass3Tasks.length > 0) {
+          setProgress(`Pass 3: fetching ${pass3Tasks.length} sub-discovered result pages...`);
+          const pass3Htmls = await withLimit(pass3Tasks.map((t) => t.url), 8, fetchHTML, "Pass 3");
+          pass3Tasks.forEach((task, i) => {
+            const html = pass3Htmls[i];
+            if (!html) return;
+            let cands = [];
+            try { cands = parseResultPageMulti(html); }
+            catch (e) { console.warn("parseResultPageMulti (pass 3) failed:", e); }
+            parsedByRow[task.rowIdx].push({
+              url: task.url,
+              label: task.meta.label,
+              candidates: cands,
+              count: cands.length,
+              isFinalMarked: task.meta.isFinalMarked,
+              isFinalLabel: task.meta.isFinalLabel,
+              isInitialLabel: task.meta.isInitialLabel,
+            });
+          });
+        }
+      }
+
+      // Assign roles. User's rule:
+      //   Applicants = Initial Short listing (largest count or "Initial" label)
+      //   Selected   = Final Result (smallest count or "Final" label/marker)
       branchFiltered.forEach((row, i) => {
+        // Track scrape attempts so the UI can show "checked X sources" even
+        // when results are 0. Cleared before chrome.storage save.
+        row.sourcesChecked = parsedByRow[i].length;
+
         const parsed = parsedByRow[i].filter((p) => p.count > 0);
         let finalPick = null, initialPick = null;
 
         if (parsed.length === 1) {
           const single = parsed[0];
-          // With only one round, the label decides. Default to "final" when
-          // the label is ambiguous — at least the count gets surfaced.
           if (single.isInitialLabel && !(single.isFinalMarked || single.isFinalLabel)) {
             initialPick = single;
           } else {
@@ -1223,12 +1343,8 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
           finalPick = parsed.find((p) => p.isFinalMarked || p.isFinalLabel);
           initialPick = parsed.find((p) => p.isInitialLabel && p !== finalPick);
           const sortedAsc = [...parsed].sort((a, b) => a.count - b.count);
-          if (!finalPick) {
-            // Smallest count that isn't the label-anchored initialPick.
-            finalPick = sortedAsc.find((p) => p !== initialPick) || sortedAsc[0];
-          }
+          if (!finalPick) finalPick = sortedAsc.find((p) => p !== initialPick) || sortedAsc[0];
           if (!initialPick) {
-            // Largest count that isn't finalPick.
             const sortedDesc = [...parsed].sort((a, b) => b.count - a.count);
             initialPick = sortedDesc.find((p) => p !== finalPick) || null;
           }
@@ -1247,27 +1363,29 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
           row.applicantRoundLabel = initialPick.label;
         }
 
-        // Inline fallback: some companies publish the selects directly in
-        // the Notifications panel (no /resultlist/ URL exists). Only run
-        // when we didn't already get a selectedCount.
-        if (!row.selectedCount) {
+        // FALLBACK — inline parse the notice page itself (some companies put
+        // the candidate table inside the notification panel). Only when both
+        // counts are still empty.
+        if (!row.selectedCount && !row.applicantCount) {
           const noticeHtml = noticeHTMLs[row._origIdx];
-          let inlineCands = [];
-          try { if (noticeHtml) inlineCands = parseInlineCandidates(noticeHtml); }
-          catch (e) { console.warn("parseInlineCandidates failed:", e); }
-          if (inlineCands.length > 0) {
-            const agg = aggregateSelected(inlineCands);
-            row.selectedCount = agg.count;
-            row.selectedByBranch = agg.byBranch;
-            row.selectedList = agg.list;
+          if (noticeHtml) {
+            let inlineCands = [];
+            try { inlineCands = parseResultPageMulti(noticeHtml); }
+            catch (e) { console.warn("inline parse failed:", e); }
+            if (inlineCands.length > 0) {
+              const agg = aggregateSelected(inlineCands);
+              row.selectedCount = agg.count;
+              row.selectedByBranch = agg.byBranch;
+              row.selectedList = agg.list;
+            }
           }
         }
       });
 
       const withFinal = branchFiltered.filter((r) => r.selectedCount > 0).length;
       const withInitial = branchFiltered.filter((r) => r.applicantCount > 0).length;
-      const withAnyLinks = parsedByRow.filter((p) => p.length > 0).length;
-      setProgress(`Result links found: ${withAnyLinks}/${branchFiltered.length}; selected parsed: ${withFinal}; applicants parsed: ${withInitial}.`);
+      const withAnySource = branchFiltered.filter((r) => r.sourcesChecked > 0).length;
+      setProgress(`Done. Sources checked: ${withAnySource}/${branchFiltered.length}; selected parsed: ${withFinal}; applicants parsed: ${withInitial}.`);
     }
     branchFiltered.forEach((r) => delete r._origIdx);
 

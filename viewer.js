@@ -221,7 +221,12 @@ function selectedGridHTML(r) {
 function funnelMiniHTML(r) {
   const app = r.applicantCount || 0;
   const sel = r.selectedCount || 0;
-  if (!app && !sel) return '<span class="empty">no rounds tracked yet</span>';
+  const sources = r.sourcesChecked || 0;
+  if (!app && !sel) {
+    return sources > 0
+      ? `<span class="empty">checked ${sources} source${sources === 1 ? "" : "s"} — no published results yet</span>`
+      : '<span class="empty">no rounds published yet</span>';
+  }
   const conv = (app > 0 && sel > 0) ? ` <span class="conv">(${((sel / app) * 100).toFixed(0)}%)</span>` : "";
   const appPart = app
     ? `<span class="stat-pill app"><strong>${app}</strong> applied</span>`
@@ -236,7 +241,22 @@ function funnelMiniHTML(r) {
 function funnelPanelHTML(r) {
   const app = r.applicantCount || 0;
   const sel = r.selectedCount || 0;
-  if (!app && !sel) return "";
+  const sources = r.sourcesChecked || 0;
+
+  // Empty state — be explicit about WHY (helps user distinguish "no results
+  // published yet" from "scraper bug"). Always render the panel so the user
+  // sees a consistent layout.
+  if (!app && !sel) {
+    const msg = sources > 0
+      ? `Checked ${sources} result source${sources === 1 ? "" : "s"} for this company — no parsable student lists yet. The TNP team usually publishes selects after each round concludes; re-scrape later.`
+      : `No result-list URLs published yet on this company's notice page. The TNP team adds these after each round concludes.`;
+    return `
+      <div class="funnel">
+        <div class="funnel-head">Selection funnel</div>
+        <div class="funnel-empty" style="text-align:center; padding: 12px 4px;">${msg}</div>
+      </div>`;
+  }
+
   const conv = (app > 0 && sel > 0) ? `${((sel / app) * 100).toFixed(1)}% conversion` : "";
   const appBranches = (r.applicantByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
   const selBranches = (r.selectedByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
