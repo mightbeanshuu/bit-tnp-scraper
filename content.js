@@ -1,8 +1,12 @@
-// BIT TNP Scraper — content script (v5)
+// BIT TNP Scraper — content script (v6)
 // Walks all pagination pages, fetches detail/notice/result pages, returns
 // structured rows JSON. Formatting (CSV/XLSX/PDF) happens in popup.js.
 // v5 (2.6.0): fetch both first-round (applicants) and final-round (selects)
 // result pages; fix pickFinalLink which was picking the FIRST resultlist.
+// v6 (2.6.2): switch to panel-based result-link extraction (round anchors
+// don't use /resultlist/ URLs — find the panel by "Result" + "Last Updated"
+// co-occurrence, grab every anchor inside). Adds __BIT_TNP_INSPECT_NOTICE__
+// debug hook.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -570,12 +574,48 @@
   }
 
   // ---------- Notice → result link discovery ----------
-  // Permissive extractor: returns every <a> whose href OR text could point
-  // to a results page. Covers /resultlist/, /result/, /selection/, and any
-  // anchor whose visible text mentions Final / HR Round / Result / Selected.
-  // Records insertion order — the Result panel on BIT TNP lists rounds
-  // chronologically (initial shortlist → assessment → … → final), so order
-  // is meaningful downstream.
+  // The BIT TNP notice page has a dedicated "Result" panel (green section)
+  // listing each round with a link + date. Round anchors do NOT use a
+  // predictable URL pattern — they're regular /job/notice/... or other
+  // internal URLs. So path-based detection (/resultlist/) is unreliable.
+  // PRIMARY strategy: find the panel by its heading + "Last Updated"
+  // timestamp (those two strings co-occur ONLY in the result panel), then
+  // grab every anchor inside it.
+  function findResultsPanel(doc) {
+    const candidates = Array.from(doc.querySelectorAll("div, section, article, table, tbody, tr, td"));
+    let smallest = null;
+    let smallestSize = Infinity;
+    for (const el of candidates) {
+      const text = el.textContent || "";
+      if (text.length > 6000 || text.length < 30) continue;
+      // Both markers must co-occur. "Result" alone matches too much; "Last
+      // Updated" alone could be a generic timestamp elsewhere.
+      if (!/(^|\n|>)\s*results?\b/i.test(text)) continue;
+      if (!/last\s*updated/i.test(text)) continue;
+      // Must contain at least one anchor — otherwise it's a heading or label.
+      if (el.querySelectorAll("a[href]").length === 0) continue;
+      if (text.length < smallestSize) {
+        smallest = el;
+        smallestSize = text.length;
+      }
+    }
+    return smallest;
+  }
+
+  // Walk up to 4 ancestors looking for "Final Round" / "Final Result" text
+  // adjacent to the anchor. The label is a sibling node so we need to check
+  // the containing row/cell — not just the anchor's own text.
+  function detectIsFinal(anchor) {
+    let cur = anchor.parentElement;
+    for (let i = 0; i < 4 && cur; i++) {
+      const txt = cur.textContent || "";
+      if (txt.length > 600) break; // walked out of the row, stop
+      if (/\bfinal\s*(?:round|result)\b/i.test(txt)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
   function extractResultLinks(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const out = [];
@@ -590,20 +630,27 @@
       seen.add(abs);
       const text = (a.textContent || "").trim().slice(0, 200);
       const parentText = (a.parentElement?.textContent || "").trim().slice(0, 300);
-      const grandText = (a.parentElement?.parentElement?.textContent || "").trim().slice(0, 400);
-      // BIT TNP marks the final-round row with a red "Final Round" / "Final
-      // Result" label adjacent to the anchor. The label is a sibling node so
-      // it shows up in parent/grand textContent but NOT in the anchor's own.
-      const ctx = parentText + " " + grandText;
-      const isFinal = /\bfinal\s*(?:round|result)\b/i.test(ctx);
-      out.push({ url: abs, label: text || parentText, source, isFinal });
+      out.push({
+        url: abs,
+        label: text || parentText,
+        source,
+        isFinal: detectIsFinal(a),
+      });
     };
 
-    // 1) Direct path matches.
+    // STRATEGY A (primary): find the Result panel, grab every anchor inside.
+    // Works regardless of the round links' URL scheme.
+    const panel = findResultsPanel(doc);
+    if (panel) {
+      panel.querySelectorAll("a[href]").forEach((a) => collect(a, "panel"));
+    }
+
+    // STRATEGY B (fallback): canonical path patterns — for older portal
+    // versions or pages where the panel can't be located.
     doc.querySelectorAll('a[href*="/resultlist/"], a[href*="/result/"], a[href*="/selection/"]')
       .forEach((a) => collect(a, "path"));
 
-    // 2) Text-based: any anchor where the label talks about results.
+    // STRATEGY C (last resort): anchor text mentions result-y keywords.
     doc.querySelectorAll("a[href]").forEach((a) => {
       const t = (a.textContent || "").trim();
       if (/\b(final|hr\s*round|result|selected|selects|placed|offer|shortlist)\b/i.test(t)) {
@@ -617,16 +664,16 @@
   // Pick the FINAL-round result link.
   // Priority:
   //   1) Explicit "Final Round" / "Final Result" red marker — authoritative.
-  //   2) LAST /resultlist/ link in document order (Result panel is chronological,
-  //      so the latest entry is almost always the final round).
-  //   3) Label-based fallbacks for legacy / unusual layouts.
-  // This was previously picking the FIRST /resultlist/ link, which is actually
-  // the FIRST round (initial shortlist). That bug under-reported selected
-  // counts as "everyone who passed the OA" for multi-round companies.
+  //   2) Among panel-sourced links, the LAST one (chronological order:
+  //      initial → assessment → final).
+  //   3) Among /resultlist/ links, the LAST one (older portal layouts).
+  //   4) Label-based fallbacks for unusual layouts.
   function pickFinalLink(links) {
     if (!links.length) return null;
     const finalMarked = links.find((l) => l.isFinal);
     if (finalMarked) return finalMarked;
+    const panelLinks = links.filter((l) => l.source === "panel");
+    if (panelLinks.length) return panelLinks[panelLinks.length - 1];
     const resultlinks = links.filter((l) => /\/resultlist\//i.test(l.url));
     if (resultlinks.length) return resultlinks[resultlinks.length - 1];
     return (
@@ -638,14 +685,19 @@
   }
 
   // Pick the FIRST-round result link (initial shortlist / OA results /
-  // assessment shortlist). Used as a proxy for "total applicants" — strictly
-  // speaking it's the count of students who CLEARED the first round, but the
-  // BIT portal does not publish raw application counts.
-  // Restricted to /resultlist/ paths only — text-based matches risk picking
-  // notice sub-pages from the yellow "Notifications & Updates" section.
+  // assessment shortlist). Proxy for "total applicants" — the portal does
+  // not publish raw application counts; this is the count of students who
+  // CLEARED the first round.
   // Returns null when there's only one round (no separate first round exists).
   function pickFirstRoundLink(links) {
     if (!links.length) return null;
+    // Prefer panel-sourced links (canonical for BIT TNP layout).
+    const panelLinks = links.filter((l) => l.source === "panel");
+    if (panelLinks.length) {
+      const nonFinal = panelLinks.filter((l) => !l.isFinal);
+      if (!nonFinal.length) return null;
+      return nonFinal[0];
+    }
     const resultlinks = links.filter((l) => /\/resultlist\//i.test(l.url));
     if (!resultlinks.length) return null;
     const nonFinal = resultlinks.filter((l) => !l.isFinal);
@@ -1058,7 +1110,8 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
 
       const withResults = branchFiltered.filter((r) => r.selectedCount > 0).length;
       const withApplicants = branchFiltered.filter((r) => r.applicantCount > 0).length;
-      setProgress(`Final results: ${withResults}/${branchFiltered.length}; first-round counts: ${withApplicants}/${branchFiltered.length}.`);
+      const withAnyLinks = branchFiltered.filter((_, i) => finalUrls[i] || firstUrls[i]).length;
+      setProgress(`Result links found: ${withAnyLinks}/${branchFiltered.length}; final selects parsed: ${withResults}; first-round parsed: ${withApplicants}.`);
     }
     branchFiltered.forEach((r) => delete r._origIdx);
 
@@ -1113,6 +1166,38 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       currentPageRows: rows.length,
       totalEntriesReported: total,
       firstRow: rows[0] || null,
+    }, null, 2);
+  };
+
+  // Diagnostic: fetch a single notice page and show what result links the
+  // extractor found, which one would be picked as first/final, and whether
+  // the result parsing would yield any candidates. Use from the browser
+  // console: await __BIT_TNP_INSPECT_NOTICE__("https://tp.bitmesra.co.in/job/notice/<id>")
+  window.__BIT_TNP_INSPECT_NOTICE__ = async function (noticeUrl) {
+    if (!noticeUrl) return "Pass a notice URL like /job/notice/<id>";
+    const html = await fetchHTML(noticeUrl);
+    if (!html) return `Failed to fetch ${noticeUrl}`;
+    const links = extractResultLinks(html);
+    const finalLink = pickFinalLink(links);
+    const firstLink = pickFirstRoundLink(links);
+    let finalCount = 0, firstCount = 0;
+    if (finalLink) {
+      const h = await fetchHTML(finalLink.url);
+      if (h) finalCount = parseResultPage(h).length;
+    }
+    if (firstLink) {
+      const h = await fetchHTML(firstLink.url);
+      if (h) firstCount = parseResultPage(h).length;
+    }
+    return JSON.stringify({
+      noticeUrl,
+      panelFound: !!findResultsPanel(new DOMParser().parseFromString(html, "text/html")),
+      totalLinksFound: links.length,
+      links: links.map((l) => ({
+        url: l.url, label: l.label.slice(0, 80), source: l.source, isFinal: l.isFinal,
+      })),
+      pickedFinal: finalLink ? { url: finalLink.url, label: finalLink.label, parsedCount: finalCount } : null,
+      pickedFirst: firstLink ? { url: firstLink.url, label: firstLink.label, parsedCount: firstCount } : null,
     }, null, 2);
   };
 
