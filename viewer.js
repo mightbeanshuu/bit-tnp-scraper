@@ -45,6 +45,12 @@ function deriveBranchSet(rows) {
 }
 
 (async () => {
+  // Version pill: read from manifest — single source of truth so bumping
+  // manifest.json automatically updates the UI.
+  try {
+    const v = chrome.runtime.getManifest()?.version;
+    if (v) document.getElementById("versionPill").textContent = "v" + v;
+  } catch {}
   const data = await chrome.storage.local.get(["lastScrape"]);
   const last = data.lastScrape;
   if (!last || !last.rows || !last.rows.length) {

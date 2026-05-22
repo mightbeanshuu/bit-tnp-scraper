@@ -115,6 +115,12 @@ function filterByCTCRange(rows, minLPA, maxLPA) {
   });
 }
 
+// ---------- Version pill (read from manifest — single source of truth) ----------
+try {
+  const v = chrome.runtime.getManifest()?.version;
+  if (v) document.getElementById("versionPill").textContent = "v" + v;
+} catch {}
+
 // ---------- AI status indicator ----------
 (async () => {
   const { groqApiKey } = await chrome.storage.local.get("groqApiKey");
