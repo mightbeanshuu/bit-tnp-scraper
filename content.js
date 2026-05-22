@@ -259,11 +259,14 @@
         if (cells.length <= ctcIdx) continue;
         // Look for UG/PG marker in the program column if known; otherwise
         // fall back to the row's first cell (some tables omit the header).
+        // Optional-chain every cell access — header indices may exceed a
+        // given row's cell count on malformed/summary rows; that used to
+        // throw and kill the entire scrape.
         const programText = programIdx >= 0
-          ? (cells[programIdx].textContent || "").trim().toLowerCase()
+          ? (cells[programIdx]?.textContent || "").trim().toLowerCase()
           : (cells[0]?.textContent || "").trim().toLowerCase();
-        const ctcText = (cells[ctcIdx].textContent || "").trim().replace(/\s+/g, " ");
-        const bpText = basePayIdx >= 0 ? (cells[basePayIdx].textContent || "").trim().replace(/\s+/g, " ") : "";
+        const ctcText = (cells[ctcIdx]?.textContent || "").trim().replace(/\s+/g, " ");
+        const bpText = basePayIdx >= 0 ? (cells[basePayIdx]?.textContent || "").trim().replace(/\s+/g, " ") : "";
         if (!/\d/.test(ctcText)) continue;
         if (/\bug\b/.test(programText)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
         else if (/\bpg\b/.test(programText)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
@@ -725,7 +728,11 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
   }
 
   // ---------- Main ----------
-  window.__BIT_TNP_SCRAPE__ = async function (options) {
+  // The actual scrape body lives in _scrape — the exported entry point wraps
+  // it in try/catch so any unexpected throw returns a structured error to
+  // the popup instead of the bare `undefined` that surfaces as
+  // "scraper returned nothing".
+  async function _scrape(options) {
     setProgress("Walking dashboard pagination...");
     const dashboardRows = await walkAllPages();
     if (!dashboardRows.length) {
@@ -747,7 +754,12 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     ]);
 
     const merged = dashboardRows.map((row, i) => {
-      const det = detailHTMLs[i] ? parseDetailPage(detailHTMLs[i]) : {};
+      // Per-row try/catch: one malformed detail page must not abort the
+      // entire scrape (which would otherwise return undefined to the popup
+      // and show "scraper returned nothing").
+      let det = {};
+      try { if (detailHTMLs[i]) det = parseDetailPage(detailHTMLs[i]); }
+      catch (e) { console.warn("parseDetailPage failed for", row.company, e); }
       return { ...row, ...det, _detailHTML: detailHTMLs[i] || "", _origIdx: i };
     });
 
@@ -788,11 +800,13 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
 
       branchFiltered.forEach((row, i) => {
         let cands = [];
-        if (resultHTMLs[i]) cands = parseResultPage(resultHTMLs[i]);
+        try { if (resultHTMLs[i]) cands = parseResultPage(resultHTMLs[i]); }
+        catch (e) { console.warn("parseResultPage failed for", row.company, e); }
         if (cands.length === 0) {
           // Inline fallback — look for candidate table on the notice page itself.
           const noticeHtml = noticeHTMLs[row._origIdx];
-          if (noticeHtml) cands = parseInlineCandidates(noticeHtml);
+          try { if (noticeHtml) cands = parseInlineCandidates(noticeHtml); }
+          catch (e) { console.warn("parseInlineCandidates failed for", row.company, e); }
         }
         const agg = aggregateSelected(cands);
         row.selectedCount = agg.count;
@@ -835,6 +849,16 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       afterBranch: branchFiltered.length,
       rows: sorted,
     };
+  }
+
+  window.__BIT_TNP_SCRAPE__ = async function (options) {
+    try {
+      return await _scrape(options);
+    } catch (e) {
+      console.error("Scrape failed:", e);
+      setProgress(`Scrape error: ${e?.message || e}`);
+      return { error: `Scrape crashed: ${e?.message || String(e)}`, rawCount: 0 };
+    }
   };
 
   window.__BIT_TNP_INSPECT__ = function () {
