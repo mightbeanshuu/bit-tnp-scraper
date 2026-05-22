@@ -257,12 +257,16 @@
       for (const tr of allRows) {
         const cells = Array.from(tr.querySelectorAll("td"));
         if (cells.length <= ctcIdx) continue;
-        const program = programIdx >= 0 ? (cells[programIdx].textContent || "").trim().toLowerCase() : "";
+        // Look for UG/PG marker in the program column if known; otherwise
+        // fall back to the row's first cell (some tables omit the header).
+        const programText = programIdx >= 0
+          ? (cells[programIdx].textContent || "").trim().toLowerCase()
+          : (cells[0]?.textContent || "").trim().toLowerCase();
         const ctcText = (cells[ctcIdx].textContent || "").trim().replace(/\s+/g, " ");
         const bpText = basePayIdx >= 0 ? (cells[basePayIdx].textContent || "").trim().replace(/\s+/g, " ") : "";
         if (!/\d/.test(ctcText)) continue;
-        if (/\bug\b/.test(program)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
-        else if (/\bpg\b/.test(program)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
+        if (/\bug\b/.test(programText)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
+        else if (/\bpg\b/.test(programText)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
         else if (!out.ugCTC) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
       }
       if (out.ugCTC || out.pgCTC) return out;
@@ -365,7 +369,13 @@
     // Parse circuital vs non-circuital CGPA from the criteria text.
     // ONLY parse CGPA from criteriaUG or the eligibility section — never the
     // whole body (that's how we ended up with '10' from random page text).
-    const cgInfo = parseCGPA(data.criteriaUG || elig);
+    // Skip single-number parsing when criteria has multiple CGPA references
+    // (e.g. DE Shaw's "7 CGPA (CS, IT) and 8 CGPA (Circuital)") — any single
+    // pick would be misleading. The raw text is preserved in criteriaUG and
+    // rendered verbatim by the viewer.
+    const criteriaForCGPA = data.criteriaUG || elig || "";
+    const multiCGPA = (criteriaForCGPA.match(/\bCGPA\b/gi) || []).length >= 2;
+    const cgInfo = multiCGPA ? null : parseCGPA(criteriaForCGPA);
     if (cgInfo) {
       if (cgInfo.both) {
         data.cgpaCirc = cgInfo.both;

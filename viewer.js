@@ -698,12 +698,29 @@ function toXLSX(rows) {
   ]);
 }
 
+// Plain-text CGPA cell for the PDF — mirrors viewer.cgpaCardDisplay logic
+// but text-only. v2.5.0 changed criteriaUG to include "UG line · Other Criteria"
+// which made dumping raw text blow up the PDF column width.
+function cgpaPdfDisplay(r) {
+  const raw = r.criteriaUG || "";
+  if ((raw.match(/\bCGPA\b/gi) || []).length >= 2) {
+    return raw.length > 90 ? raw.slice(0, 87) + "…" : raw;
+  }
+  const circ = formatCGPA(r.cgpaCirc);
+  const nonCirc = formatCGPA(r.cgpaNonCirc);
+  if (circ && nonCirc) return `Circ ${circ} / Non-circ ${nonCirc}`;
+  if (circ) return `Circ ${circ}`;
+  if (nonCirc) return `Non-circ ${nonCirc}`;
+  if (raw) return raw.length > 60 ? raw.slice(0, 57) + "…" : raw;
+  return "—";
+}
+
 // Compact PDF — only the essentials per user request:
 // Company · Type · CGPA · Monthly Stipend · Annual CTC · Selected count
 const PDF_COLS = [
   ["Company", (r) => r.company],
   ["Type", (r) => r.type || "—"],
-  ["CGPA", (r) => r.criteriaUG || "—"],
+  ["CGPA", cgpaPdfDisplay],
   ["Monthly", (r) => r.stipendUG ? `₹${r.stipendUG}/mo` : "—"],
   ["Annual CTC", (r) => r.annualCTCDisplay || (r.ctc || r.basePay || "—")],
   ["Selected", (r) => r.selectedCount ? `${r.selectedCount} (${r.selectedByBranch || ""})` : "—"],
