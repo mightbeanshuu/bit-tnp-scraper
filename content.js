@@ -237,6 +237,27 @@
   // Keywords: CTC, Total CTC, Total Package, Total Compensation, Total Pay,
   // Annual Pay, Gross CTC, Gross Package. Returns the raw matched value
   // string so downstream parseAnnualPay can apply unit logic.
+  // Strict validator: does this string actually look like a salary value?
+  // Acceptable: "30 LPA", "23.5 Lakhs", "₹ 2350000", "₹400000", "1.2 Cr".
+  // Rejected: dates ("30th Oct 2025", "31-10-2025"), page headers, prose,
+  // bare small numbers ("30", "31"), counts. The previous parser was
+  // matching dates near the word CTC and inflating them via the n<100
+  // shortcut in parseAnnualPay (30 → 30 LPA). This is the single most
+  // important guard preventing that.
+  function isPlausibleSalaryString(s) {
+    if (!s || typeof s !== "string") return false;
+    if (s.length > 30) return false;
+    const cleaned = s.toLowerCase().replace(/[₹\s,]/g, "").trim();
+    if (!/^\d+(?:\.\d+)?(?:lpa|lakhs?|lacs?|cr|crore|l)?$/.test(cleaned)) return false;
+    const numeric = parseFloat(cleaned);
+    if (isNaN(numeric) || numeric <= 0) return false;
+    const hasUnit = /(?:lpa|lakhs?|lacs?|cr|crore|l)$/.test(cleaned);
+    // Bare number must be ≥ ₹1L. A CTC under 1L p.a. is implausible and
+    // small numbers are almost always dates / counts / vacancy numbers.
+    if (!hasUnit && numeric < 100000) return false;
+    return true;
+  }
+
   function extractMaxCTC(text) {
     if (!text) return null;
     // Two regex passes to keep each pattern simple:
@@ -253,6 +274,9 @@
       let m;
       while ((m = re.exec(text)) !== null) {
         const raw = m[1].trim().replace(/\s+/g, " ");
+        // STRICT: reject anything that doesn't look like a real salary
+        // value. This is where dates like "30th Oct" used to slip through.
+        if (!isPlausibleSalaryString(raw)) continue;
         const v = parseAnnualPay(raw);
         if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
       }
@@ -295,6 +319,7 @@
     let m;
     while ((m = re.exec(text)) !== null) {
       const raw = m[1].trim().replace(/\s+/g, " ");
+      if (!isPlausibleSalaryString(raw)) continue;
       const v = parseAnnualPay(raw);
       if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
     }
@@ -367,7 +392,15 @@
           }
         }
 
-        if (!/\d/.test(ctcText)) continue;
+        // STRICT cell-content check — the cell at the CTC column must look
+        // like a salary value, not a notice blob with a stray digit. Without
+        // this, a non-salary table whose first row coincidentally has "CTC"
+        // as a header could plant a long text string into ctcText, which
+        // parseAnnualPay would then mine for a 2-digit number (e.g. "30"
+        // from "30th Oct 2025") and inflate to 30 LPA.
+        if (!isPlausibleSalaryString(ctcText)) continue;
+        // Sanity-clean bpText too — keep it only if it's a real salary string.
+        if (bpText && !isPlausibleSalaryString(bpText)) bpText = "";
         if (/\bug\b/.test(programText)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
         else if (/\bpg\b/.test(programText)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
         else if (!out.ugCTC) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
@@ -774,19 +807,24 @@
   }
 
   // Compute the canonical annual CTC for a row.
-  // Priority: parsed CTC > parsed basePay > stipendUG×12.
+  // Per user request: pick the LARGEST of {table CTC, basePay, stipend×12}.
+  // Was a priority order — but for intern-heavy postings where stipend×12
+  // exceeds the recorded "CTC" (or where the table CTC is just a basic
+  // pay band and stipend already reflects the full offer), priority order
+  // under-reports.
   // Returns { value: rupees|null, source: "ctc"|"basePay"|"stipendx12"|"unknown" }.
   function computeAnnualCTC(row) {
     const ctc = parseAnnualPay(row.ctc);
-    if (ctc != null) return { value: ctc, source: "ctc" };
     const bp = parseAnnualPay(row.basePay);
-    if (bp != null) return { value: bp, source: "basePay" };
     const stipend = parseStipendMonthly(row.stipendUG);
-    if (stipend != null) {
-      const annual = clamp(stipend * 12);
-      if (annual != null) return { value: annual, source: "stipendx12" };
-    }
-    return { value: null, source: "unknown" };
+    const stipendAnnual = stipend != null ? clamp(stipend * 12) : null;
+    const candidates = [];
+    if (ctc != null) candidates.push({ value: ctc, source: "ctc" });
+    if (bp != null) candidates.push({ value: bp, source: "basePay" });
+    if (stipendAnnual != null) candidates.push({ value: stipendAnnual, source: "stipendx12" });
+    if (!candidates.length) return { value: null, source: "unknown" };
+    candidates.sort((a, b) => b.value - a.value);
+    return candidates[0];
   }
 
   // ---------- AI enrichment (Groq) ----------
@@ -839,10 +877,21 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     if (!ai || typeof ai !== "object") return row;
     // Prefer AI for missing-or-empty fields; trust regex when both exist.
     const useAI = (regex, aiVal) => (regex && String(regex).trim()) ? regex : (aiVal ?? "");
+    // For salary fields, only accept the AI value if it actually looks like
+    // a salary string. The Groq model occasionally returns junk such as
+    // page-header text ("Posted By PATNA CAMPUS Dated: 30th Oct 2025…")
+    // as ctc, which parseAnnualPay then mines for a stray "30" and
+    // inflates to 30 LPA. The validator drops anything that isn't a clean
+    // "30 LPA" / "₹2350000" / "1.2 Cr" shape.
+    const useSalaryAI = (regex, aiVal) => {
+      if (regex && String(regex).trim()) return regex;
+      if (aiVal != null && isPlausibleSalaryString(String(aiVal))) return String(aiVal);
+      return "";
+    };
     row.designation = useAI(row.designation, ai.designation);
     row.placeOfPosting = useAI(row.placeOfPosting, ai.placeOfPosting);
-    row.ctc = useAI(row.ctc, ai.ctc);
-    row.basePay = useAI(row.basePay, ai.basePay);
+    row.ctc = useSalaryAI(row.ctc, ai.ctc);
+    row.basePay = useSalaryAI(row.basePay, ai.basePay);
     if (!row.stipendUG && ai.stipendUG != null) row.stipendUG = String(ai.stipendUG);
     if (!row.stipendPG && ai.stipendPG != null) row.stipendPG = String(ai.stipendPG);
     if (!row.type && ai.type) row.type = ai.type;
