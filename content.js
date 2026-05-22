@@ -11,6 +11,14 @@
 // per-row student validator — drops company-metadata rows like "TRAINING
 // AND PLACEMENT...", "Dead Line: …", URLs, and empty "()" entries that were
 // inflating selectedCount and polluting branch tallies.
+// v7 (2.6.4): fetch ALL /resultlist/ links on each notice page (not just
+// the ones in the green Result panel) and assign roles by student count —
+// smallest = final selected, largest = initial applicants. Fixes Arcesium:
+// the Final Result link there is published as a yellow Notifications entry
+// ("Shortlisted Students for Interview"), not in the Result panel, so the
+// panel-only extractor was reporting 17 selected (actually applicants) and
+// 0 applicants. Label hints ("Initial Short listing", "Final Result") take
+// precedence over the count heuristic when present.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -709,6 +717,51 @@
     return nonFinal[0];
   }
 
+  // Scrape-time primary extractor: collect EVERY /resultlist/, /result/, or
+  // /selection/ link from the entire notice page (Result panel AND yellow
+  // Notifications section). On some companies (Arcesium being the discovery
+  // case) the Final Result link is published as a Notification entry —
+  // titled "Shortlisted Students for Interview" — NOT as a Result-panel
+  // row. Restricting to the Result panel misses it entirely.
+  //
+  // The scraper fetches every URL collected here and assigns roles by
+  // student-count comparison (smallest = final selected, largest = initial
+  // shortlist applicants). Label hints — explicit "Initial Short listing"
+  // text or "Final Result"/"Final Round" markers — take precedence over
+  // counts when present.
+  function extractAllResultlistLinks(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = [];
+    const seen = new Set();
+    doc.querySelectorAll('a[href*="/resultlist/"], a[href*="/result/"], a[href*="/selection/"]')
+      .forEach((a) => {
+        const href = a.getAttribute("href");
+        if (!href || href === "#" || href.startsWith("javascript:")) return;
+        let abs;
+        try { abs = new URL(href, location.origin).href; } catch { return; }
+        if (seen.has(abs)) return;
+        seen.add(abs);
+        const text = (a.textContent || "").trim().slice(0, 200);
+        const parentText = (a.parentElement?.textContent || "").trim().slice(0, 300);
+        const ctx = text + " " + parentText;
+        out.push({
+          url: abs,
+          label: text || parentText,
+          isFinalMarked: detectIsFinal(a),
+          isFinalLabel:
+            /\bfinal\s*(?:result|round|selected|selection|list)\b/i.test(ctx) ||
+            /\bselected\s*candidates?\b/i.test(ctx),
+          // "Initial" must be explicit — the literal word "Initial". Pure
+          // "Shortlist" is too ambiguous (Arcesium's Final Result link is
+          // labeled "Shortlisted Students for Interview").
+          isInitialLabel:
+            /\binitial\s*(?:short|shortlist|listing)/i.test(ctx) ||
+            /\b(?:first|1st)\s*round\b/i.test(ctx),
+        });
+      });
+    return out;
+  }
+
   // Some companies announce selects INLINE on the notice page (no separate
   // /resultlist/ page exists). Scan the notice HTML for any candidate table.
   function parseInlineCandidates(html) {
@@ -1108,69 +1161,113 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     const branchFiltered = merged.filter((r) => isBranchEligible(r, options.branches));
 
     if (options.fetchResults) {
-      // Two-pass result resolution per company:
-      //   Pass A: pick the most likely result link from notice page and fetch.
-      //   Pass B: if A returned no candidates, scan the notice page itself
-      //           for an inline Roll No / Branch table (some companies
-      //           publish results directly in the notification panel).
-      // We resolve TWO links per company:
-      //   - final-round link  → selectedCount (final hires)
-      //   - first-round link  → applicantCount (initial shortlist; proxy
-      //                          for total applicants — the portal does not
-      //                          publish raw application numbers).
-      const finalUrls = [];
-      const firstUrls = [];
-      const firstLabels = [];
-      branchFiltered.forEach((row) => {
+      // Strategy (the user's rule, literally):
+      //   - Applicants = count from Initial Short listing (or first round)
+      //   - Selected   = count from Final Result
+      // The Final Result link sometimes lives in the yellow Notifications
+      // section instead of the green Result panel (Arcesium case). So we
+      // collect EVERY /resultlist/ URL on the notice page, fetch each,
+      // count valid students, then assign roles:
+      //   1) Label-anchored picks first (explicit "Final" / "Initial"
+      //      keywords or red "Final Round" marker).
+      //   2) Count-based fallback — smallest count = final selected, largest
+      //      = initial applicants (in any selection pipeline final ≤ initial).
+      const linksPerRow = branchFiltered.map((row) => {
         const html = noticeHTMLs[row._origIdx];
-        if (!html) { finalUrls.push(null); firstUrls.push(null); firstLabels.push(""); return; }
-        const links = extractResultLinks(html);
-        const finalLink = pickFinalLink(links);
-        const firstLink = pickFirstRoundLink(links);
-        finalUrls.push(finalLink?.url || null);
-        // Skip first-round fetch when it would equal the final URL (single
-        // round listed — no separate initial shortlist exists).
-        const firstUrl = firstLink?.url || null;
-        firstUrls.push(firstUrl && firstUrl !== finalLink?.url ? firstUrl : null);
-        firstLabels.push(firstLink?.label || "");
+        return html ? extractAllResultlistLinks(html) : [];
       });
 
-      setProgress(`Fetching ${finalUrls.filter(Boolean).length} final + ${firstUrls.filter(Boolean).length} first-round pages...`);
-      const [resultHTMLs, firstRoundHTMLs] = await Promise.all([
-        withLimit(finalUrls, 8, fetchHTML, "Final results"),
-        withLimit(firstUrls, 8, fetchHTML, "First round"),
-      ]);
+      const fetchTasks = [];
+      linksPerRow.forEach((links, rowIdx) => {
+        links.forEach((link, linkIdx) => {
+          fetchTasks.push({ url: link.url, rowIdx, linkIdx });
+        });
+      });
+
+      setProgress(`Fetching ${fetchTasks.length} result pages across ${branchFiltered.length} companies...`);
+      const fetched = await withLimit(fetchTasks.map((t) => t.url), 8, fetchHTML, "Result pages");
+
+      const parsedByRow = branchFiltered.map(() => []);
+      fetchTasks.forEach((task, i) => {
+        const html = fetched[i];
+        if (!html) return;
+        let cands = [];
+        try { cands = parseResultPage(html); }
+        catch (e) { console.warn("parseResultPage failed:", e); }
+        const meta = linksPerRow[task.rowIdx][task.linkIdx];
+        parsedByRow[task.rowIdx].push({
+          url: task.url,
+          label: meta.label,
+          candidates: cands,
+          count: cands.length,
+          isFinalMarked: meta.isFinalMarked,
+          isFinalLabel: meta.isFinalLabel,
+          isInitialLabel: meta.isInitialLabel,
+        });
+      });
 
       branchFiltered.forEach((row, i) => {
-        // Final round → selectedCount.
-        let cands = [];
-        try { if (resultHTMLs[i]) cands = parseResultPage(resultHTMLs[i]); }
-        catch (e) { console.warn("parseResultPage failed for", row.company, e); }
-        if (cands.length === 0) {
-          // Inline fallback — look for candidate table on the notice page itself.
-          const noticeHtml = noticeHTMLs[row._origIdx];
-          try { if (noticeHtml) cands = parseInlineCandidates(noticeHtml); }
-          catch (e) { console.warn("parseInlineCandidates failed for", row.company, e); }
-        }
-        const agg = aggregateSelected(cands);
-        row.selectedCount = agg.count;
-        row.selectedByBranch = agg.byBranch;
-        row.selectedList = agg.list;
+        const parsed = parsedByRow[i].filter((p) => p.count > 0);
+        let finalPick = null, initialPick = null;
 
-        // First round → applicantCount (initial shortlist proxy).
-        let firstCands = [];
-        try { if (firstRoundHTMLs[i]) firstCands = parseResultPage(firstRoundHTMLs[i]); }
-        catch (e) { console.warn("parseResultPage (first round) failed for", row.company, e); }
-        const firstAgg = aggregateSelected(firstCands);
-        row.applicantCount = firstAgg.count;
-        row.applicantByBranch = firstAgg.byBranch;
-        row.applicantRoundLabel = firstLabels[i] || "";
+        if (parsed.length === 1) {
+          const single = parsed[0];
+          // With only one round, the label decides. Default to "final" when
+          // the label is ambiguous — at least the count gets surfaced.
+          if (single.isInitialLabel && !(single.isFinalMarked || single.isFinalLabel)) {
+            initialPick = single;
+          } else {
+            finalPick = single;
+          }
+        } else if (parsed.length >= 2) {
+          finalPick = parsed.find((p) => p.isFinalMarked || p.isFinalLabel);
+          initialPick = parsed.find((p) => p.isInitialLabel && p !== finalPick);
+          const sortedAsc = [...parsed].sort((a, b) => a.count - b.count);
+          if (!finalPick) {
+            // Smallest count that isn't the label-anchored initialPick.
+            finalPick = sortedAsc.find((p) => p !== initialPick) || sortedAsc[0];
+          }
+          if (!initialPick) {
+            // Largest count that isn't finalPick.
+            const sortedDesc = [...parsed].sort((a, b) => b.count - a.count);
+            initialPick = sortedDesc.find((p) => p !== finalPick) || null;
+          }
+        }
+
+        if (finalPick) {
+          const agg = aggregateSelected(finalPick.candidates);
+          row.selectedCount = agg.count;
+          row.selectedByBranch = agg.byBranch;
+          row.selectedList = agg.list;
+        }
+        if (initialPick && initialPick !== finalPick) {
+          const agg = aggregateSelected(initialPick.candidates);
+          row.applicantCount = agg.count;
+          row.applicantByBranch = agg.byBranch;
+          row.applicantRoundLabel = initialPick.label;
+        }
+
+        // Inline fallback: some companies publish the selects directly in
+        // the Notifications panel (no /resultlist/ URL exists). Only run
+        // when we didn't already get a selectedCount.
+        if (!row.selectedCount) {
+          const noticeHtml = noticeHTMLs[row._origIdx];
+          let inlineCands = [];
+          try { if (noticeHtml) inlineCands = parseInlineCandidates(noticeHtml); }
+          catch (e) { console.warn("parseInlineCandidates failed:", e); }
+          if (inlineCands.length > 0) {
+            const agg = aggregateSelected(inlineCands);
+            row.selectedCount = agg.count;
+            row.selectedByBranch = agg.byBranch;
+            row.selectedList = agg.list;
+          }
+        }
       });
 
-      const withResults = branchFiltered.filter((r) => r.selectedCount > 0).length;
-      const withApplicants = branchFiltered.filter((r) => r.applicantCount > 0).length;
-      const withAnyLinks = branchFiltered.filter((_, i) => finalUrls[i] || firstUrls[i]).length;
-      setProgress(`Result links found: ${withAnyLinks}/${branchFiltered.length}; final selects parsed: ${withResults}; first-round parsed: ${withApplicants}.`);
+      const withFinal = branchFiltered.filter((r) => r.selectedCount > 0).length;
+      const withInitial = branchFiltered.filter((r) => r.applicantCount > 0).length;
+      const withAnyLinks = parsedByRow.filter((p) => p.length > 0).length;
+      setProgress(`Result links found: ${withAnyLinks}/${branchFiltered.length}; selected parsed: ${withFinal}; applicants parsed: ${withInitial}.`);
     }
     branchFiltered.forEach((r) => delete r._origIdx);
 
@@ -1228,35 +1325,55 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
     }, null, 2);
   };
 
-  // Diagnostic: fetch a single notice page and show what result links the
-  // extractor found, which one would be picked as first/final, and whether
-  // the result parsing would yield any candidates. Use from the browser
-  // console: await __BIT_TNP_INSPECT_NOTICE__("https://tp.bitmesra.co.in/job/notice/<id>")
+  // Diagnostic: fetch a single notice page and show every /resultlist/ link
+  // discovered, the parsed student count for each, and how the scraper
+  // would assign roles (selected vs applicants).
+  // Use from the browser console:
+  //   await __BIT_TNP_INSPECT_NOTICE__("https://tp.bitmesra.co.in/job/notice/<id>")
   window.__BIT_TNP_INSPECT_NOTICE__ = async function (noticeUrl) {
     if (!noticeUrl) return "Pass a notice URL like /job/notice/<id>";
     const html = await fetchHTML(noticeUrl);
     if (!html) return `Failed to fetch ${noticeUrl}`;
-    const links = extractResultLinks(html);
-    const finalLink = pickFinalLink(links);
-    const firstLink = pickFirstRoundLink(links);
-    let finalCount = 0, firstCount = 0;
-    if (finalLink) {
-      const h = await fetchHTML(finalLink.url);
-      if (h) finalCount = parseResultPage(h).length;
+    const links = extractAllResultlistLinks(html);
+    const parsed = await Promise.all(links.map(async (l) => {
+      const h = await fetchHTML(l.url);
+      let count = 0;
+      if (h) { try { count = parseResultPage(h).length; } catch {} }
+      return { ...l, count };
+    }));
+
+    let finalPick = null, initialPick = null;
+    const valid = parsed.filter((p) => p.count > 0);
+    if (valid.length === 1) {
+      const s = valid[0];
+      if (s.isInitialLabel && !(s.isFinalMarked || s.isFinalLabel)) initialPick = s;
+      else finalPick = s;
+    } else if (valid.length >= 2) {
+      finalPick = valid.find((p) => p.isFinalMarked || p.isFinalLabel);
+      initialPick = valid.find((p) => p.isInitialLabel && p !== finalPick);
+      const sortedAsc = [...valid].sort((a, b) => a.count - b.count);
+      if (!finalPick) finalPick = sortedAsc.find((p) => p !== initialPick) || sortedAsc[0];
+      if (!initialPick) {
+        const sortedDesc = [...valid].sort((a, b) => b.count - a.count);
+        initialPick = sortedDesc.find((p) => p !== finalPick) || null;
+      }
     }
-    if (firstLink) {
-      const h = await fetchHTML(firstLink.url);
-      if (h) firstCount = parseResultPage(h).length;
-    }
+
     return JSON.stringify({
       noticeUrl,
-      panelFound: !!findResultsPanel(new DOMParser().parseFromString(html, "text/html")),
       totalLinksFound: links.length,
-      links: links.map((l) => ({
-        url: l.url, label: l.label.slice(0, 80), source: l.source, isFinal: l.isFinal,
+      rounds: parsed.map((p) => ({
+        url: p.url,
+        label: p.label.slice(0, 80),
+        studentCount: p.count,
+        isFinalMarked: p.isFinalMarked,
+        isFinalLabel: p.isFinalLabel,
+        isInitialLabel: p.isInitialLabel,
       })),
-      pickedFinal: finalLink ? { url: finalLink.url, label: finalLink.label, parsedCount: finalCount } : null,
-      pickedFirst: firstLink ? { url: firstLink.url, label: firstLink.label, parsedCount: firstCount } : null,
+      assigned: {
+        selected: finalPick ? { url: finalPick.url, label: finalPick.label, count: finalPick.count } : null,
+        applicants: initialPick ? { url: initialPick.url, label: initialPick.label, count: initialPick.count } : null,
+      },
     }, null, 2);
   };
 
