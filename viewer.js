@@ -145,6 +145,7 @@ function applySort(rows) {
   if (mode === "ctc-asc") arr.sort((a, b) => (compValue(a) || 0) - (compValue(b) || 0));
   else if (mode === "ctc-desc") arr.sort((a, b) => (compValue(b) || 0) - (compValue(a) || 0));
   else if (mode === "selected-desc") arr.sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0));
+  else if (mode === "applicants-desc") arr.sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0));
   else if (mode === "deadline") arr.sort((a, b) => parseDeadline(a.deadline) - parseDeadline(b.deadline));
   else if (mode === "company-asc") arr.sort((a, b) => (a.company || "").localeCompare(b.company || ""));
   return arr;
@@ -266,6 +267,11 @@ function detailsHTML(r) {
         ${matchCourses.length ? `<div><strong>Matching your branches:</strong> ${matchCourses.map(escapeHtml).join(", ")}</div>` : ""}
         ${allCourses.length > matchCourses.length ? `<div style="color:var(--muted); margin-top: 6px;"><strong>All eligible:</strong> ${allCourses.map(escapeHtml).join(", ")}</div>` : ""}
       </div>` : ""}
+    ${r.applicantCount ? `
+      <h4>Applicants / first-round shortlist (${r.applicantCount})${r.applicantRoundLabel ? ` <span style="font-weight:400;color:var(--muted);">— ${escapeHtml(r.applicantRoundLabel)}</span>` : ""}</h4>
+      <div class="branch-tally">${(r.applicantByBranch || "").split(",").filter(Boolean)
+        .map((s) => `<span class="b">${escapeHtml(s.trim())}</span>`).join("")}</div>
+      ${r.selectedCount && r.applicantCount > 0 ? `<div class="body" style="margin-top:6px;">Conversion: <strong>${r.selectedCount}</strong> of <strong>${r.applicantCount}</strong> (${((r.selectedCount / r.applicantCount) * 100).toFixed(1)}%)</div>` : ""}` : ""}
     ${r.selectedCount ? `
       <h4>Selected candidates (${r.selectedCount})</h4>
       <div class="branch-tally">${(r.selectedByBranch || "").split(",").filter(Boolean)
@@ -292,6 +298,11 @@ function cardHTML(r, idx) {
   const infoRows = [];
   if (branches) infoRows.push(`<div class="info-row" data-key="branches"><span class="ilabel">Branches</span><span class="ival">${branches}</span></div>`);
   if (cgpa) infoRows.push(`<div class="info-row" data-key="cgpa"><span class="ilabel">CGPA</span><span class="ival">${cgpa}</span></div>`);
+  // Applicants = first-round shortlist count (proxy; portal doesn't publish raw applies).
+  if (r.applicantCount) {
+    const lbl = r.applicantRoundLabel ? ` <span class="empty">(${escapeHtml(r.applicantRoundLabel)})</span>` : "";
+    infoRows.push(`<div class="info-row" data-key="applicants"><span class="ilabel">Applicants</span><span class="ival"><strong>${r.applicantCount}</strong>${lbl}</span></div>`);
+  }
   infoRows.push(`<div class="info-row" data-key="selected"><span class="ilabel">Selected</span><span class="ival">${r.selectedCount ? `<strong>${r.selectedCount}</strong> · ${escapeHtml(r.selectedByBranch || "—")}` : '<span class="empty">no final result yet</span>'}</span></div>`);
   if (r.skillSet) infoRows.push(`<div class="info-row" data-key="skills"><span class="ilabel">Skills</span><span class="ival">${escapeHtml(r.skillSet)}</span></div>`);
 
@@ -373,8 +384,10 @@ function computeStats(rows) {
 
   const branchTally = {};
   let totalSelected = 0;
+  let totalApplicants = 0;
   rows.forEach((r) => {
     if (r.selectedCount) totalSelected += r.selectedCount;
+    if (r.applicantCount) totalApplicants += r.applicantCount;
     (r.selectedByBranch || "").split(",").forEach((s) => {
       const m = s.trim().match(/^(.+):\s*(\d+)$/);
       if (m) branchTally[m[1].trim()] = (branchTally[m[1].trim()] || 0) + parseInt(m[2]);
@@ -382,8 +395,9 @@ function computeStats(rows) {
   });
   const topBranches = Object.entries(branchTally).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const mostHires = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))[0] || null;
+  const mostApplicants = rows.slice().sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0))[0] || null;
 
-  return { total, avg, median, topPay, totalSelected, topBranches, mostHires };
+  return { total, avg, median, topPay, totalSelected, totalApplicants, topBranches, mostHires, mostApplicants };
 }
 
 // ============== Charts ==============
@@ -516,11 +530,16 @@ function renderInsightsRow(rows) {
     ? s.topBranches.map(([b, n]) => `${b.split(/[\s/]/)[0]}: ${n}`).join(" · ")
     : "—";
 
+  const convRate = (s.totalApplicants > 0 && s.totalSelected > 0)
+    ? ((s.totalSelected / s.totalApplicants) * 100).toFixed(1) + "%"
+    : "";
+
   $("insightsRow").innerHTML = [
     tile("Companies", String(s.total)),
     tile("Avg CTC", lpa(s.avg), s.median != null ? `median ${lpa(s.median)}` : ""),
     tile("Highest paying", s.topPay ? escapeHtml(s.topPay.company) : "—", s.topPay?.annualCTC != null ? lpa(s.topPay.annualCTC) : ""),
-    tile("Total final selects", String(s.totalSelected), s.mostHires?.selectedCount ? `${escapeHtml(s.mostHires.company)} took ${s.mostHires.selectedCount}` : ""),
+    tile("Total applicants", String(s.totalApplicants), s.mostApplicants?.applicantCount ? `${escapeHtml(s.mostApplicants.company)} had ${s.mostApplicants.applicantCount}` : ""),
+    tile("Total final selects", String(s.totalSelected), convRate ? `${convRate} conversion` : (s.mostHires?.selectedCount ? `${escapeHtml(s.mostHires.company)} took ${s.mostHires.selectedCount}` : "")),
     tile("Top branches", branchesStr.length > 40 ? branchesStr.slice(0, 40) + "…" : branchesStr),
   ].join("");
 }
@@ -532,13 +551,20 @@ function buildSummaryForLLM(rows) {
   const topPayList = topN.map((r) => `- ${r.company} · ${lpa(r.annualCTC)} · ${r.type || ""} · ${r.designation || ""}`).join("\n");
   const mostList = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))
     .filter((r) => r.selectedCount).slice(0, 6)
-    .map((r) => `- ${r.company} · ${r.selectedCount} selected · ${r.selectedByBranch || ""}`).join("\n");
+    .map((r) => {
+      const conv = r.applicantCount > 0 ? ` (${r.selectedCount}/${r.applicantCount} = ${((r.selectedCount / r.applicantCount) * 100).toFixed(0)}%)` : "";
+      return `- ${r.company} · ${r.selectedCount} selected${conv} · ${r.selectedByBranch || ""}`;
+    }).join("\n");
+  const applicantsList = rows.slice().sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0))
+    .filter((r) => r.applicantCount).slice(0, 6)
+    .map((r) => `- ${r.company} · ${r.applicantCount} first-round shortlist · ${r.applicantRoundLabel || ""}`).join("\n");
 
   return [
     `Total companies in current view: ${s.total}.`,
     `Average annual CTC: ${lpa(s.avg)}; median ${lpa(s.median)}.`,
-    `Total final selects: ${s.totalSelected}.`,
+    `Total first-round shortlist (applicants proxy): ${s.totalApplicants}. Total final selects: ${s.totalSelected}.`,
     `Top-paying companies:\n${topPayList || "—"}`,
+    `Companies with the most first-round shortlist:\n${applicantsList || "—"}`,
     `Companies with the most final selects:\n${mostList || "—"}`,
     `Branch-wise selection counts: ${s.topBranches.map(([b, n]) => `${b} ${n}`).join("; ") || "—"}.`,
   ].join("\n\n");
@@ -620,6 +646,9 @@ const EXPORT_COLUMNS = [
   ["Annual CTC (₹)", "annualCTC"],
   ["Annual CTC (display)", "annualCTCDisplay"],
   ["CTC Source", "compSource"],
+  ["Applicants (first-round count)", "applicantCount"],
+  ["Applicants (by branch)", "applicantByBranch"],
+  ["First-round label", "applicantRoundLabel"],
   ["Final Selected (count)", "selectedCount"],
   ["Final Selected (by branch)", "selectedByBranch"],
   ["Final Selected (names)", "selectedList"],
@@ -748,13 +777,14 @@ function cgpaPdfDisplay(r) {
 }
 
 // Compact PDF — only the essentials per user request:
-// Company · Type · CGPA · Monthly Stipend · Annual CTC · Selected count
+// Company · Type · CGPA · Monthly Stipend · Annual CTC · Applicants · Selected
 const PDF_COLS = [
   ["Company", (r) => r.company],
   ["Type", (r) => r.type || "—"],
   ["CGPA", cgpaPdfDisplay],
   ["Monthly", (r) => r.stipendUG ? `₹${r.stipendUG}/mo` : "—"],
   ["Annual CTC", (r) => r.annualCTCDisplay || (r.ctc || r.basePay || "—")],
+  ["Applicants", (r) => r.applicantCount ? String(r.applicantCount) : "—"],
   ["Selected", (r) => r.selectedCount ? `${r.selectedCount} (${r.selectedByBranch || ""})` : "—"],
 ];
 

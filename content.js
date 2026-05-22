@@ -1,6 +1,8 @@
-// BIT TNP Scraper — content script (v4)
+// BIT TNP Scraper — content script (v5)
 // Walks all pagination pages, fetches detail/notice/result pages, returns
 // structured rows JSON. Formatting (CSV/XLSX/PDF) happens in popup.js.
+// v5 (2.6.0): fetch both first-round (applicants) and final-round (selects)
+// result pages; fix pickFinalLink which was picking the FIRST resultlist.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -571,6 +573,9 @@
   // Permissive extractor: returns every <a> whose href OR text could point
   // to a results page. Covers /resultlist/, /result/, /selection/, and any
   // anchor whose visible text mentions Final / HR Round / Result / Selected.
+  // Records insertion order — the Result panel on BIT TNP lists rounds
+  // chronologically (initial shortlist → assessment → … → final), so order
+  // is meaningful downstream.
   function extractResultLinks(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const out = [];
@@ -584,8 +589,14 @@
       if (seen.has(abs)) return;
       seen.add(abs);
       const text = (a.textContent || "").trim().slice(0, 200);
-      const parentText = (a.parentElement?.textContent || "").trim().slice(0, 200);
-      out.push({ url: abs, label: text || parentText, source });
+      const parentText = (a.parentElement?.textContent || "").trim().slice(0, 300);
+      const grandText = (a.parentElement?.parentElement?.textContent || "").trim().slice(0, 400);
+      // BIT TNP marks the final-round row with a red "Final Round" / "Final
+      // Result" label adjacent to the anchor. The label is a sibling node so
+      // it shows up in parent/grand textContent but NOT in the anchor's own.
+      const ctx = parentText + " " + grandText;
+      const isFinal = /\bfinal\s*(?:round|result)\b/i.test(ctx);
+      out.push({ url: abs, label: text || parentText, source, isFinal });
     };
 
     // 1) Direct path matches.
@@ -603,17 +614,43 @@
     return out;
   }
 
+  // Pick the FINAL-round result link.
+  // Priority:
+  //   1) Explicit "Final Round" / "Final Result" red marker — authoritative.
+  //   2) LAST /resultlist/ link in document order (Result panel is chronological,
+  //      so the latest entry is almost always the final round).
+  //   3) Label-based fallbacks for legacy / unusual layouts.
+  // This was previously picking the FIRST /resultlist/ link, which is actually
+  // the FIRST round (initial shortlist). That bug under-reported selected
+  // counts as "everyone who passed the OA" for multi-round companies.
   function pickFinalLink(links) {
     if (!links.length) return null;
-    // Prefer explicit /resultlist/ first — those are the canonical result pages.
-    const resultlist = links.find((l) => /\/resultlist\//i.test(l.url));
-    if (resultlist) return resultlist;
+    const finalMarked = links.find((l) => l.isFinal);
+    if (finalMarked) return finalMarked;
+    const resultlinks = links.filter((l) => /\/resultlist\//i.test(l.url));
+    if (resultlinks.length) return resultlinks[resultlinks.length - 1];
     return (
       links.find((l) => /final/i.test(l.label)) ||
       links.find((l) => /\bhr\b/i.test(l.label)) ||
       links.find((l) => /\b(selected|result)\b/i.test(l.label)) ||
       links[links.length - 1]
     );
+  }
+
+  // Pick the FIRST-round result link (initial shortlist / OA results /
+  // assessment shortlist). Used as a proxy for "total applicants" — strictly
+  // speaking it's the count of students who CLEARED the first round, but the
+  // BIT portal does not publish raw application counts.
+  // Restricted to /resultlist/ paths only — text-based matches risk picking
+  // notice sub-pages from the yellow "Notifications & Updates" section.
+  // Returns null when there's only one round (no separate first round exists).
+  function pickFirstRoundLink(links) {
+    if (!links.length) return null;
+    const resultlinks = links.filter((l) => /\/resultlist\//i.test(l.url));
+    if (!resultlinks.length) return null;
+    const nonFinal = resultlinks.filter((l) => !l.isFinal);
+    if (!nonFinal.length) return null;
+    return nonFinal[0];
   }
 
   // Some companies announce selects INLINE on the notice page (no separate
@@ -965,17 +1002,36 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
       //   Pass B: if A returned no candidates, scan the notice page itself
       //           for an inline Roll No / Branch table (some companies
       //           publish results directly in the notification panel).
-      const finalUrls = branchFiltered.map((row) => {
+      // We resolve TWO links per company:
+      //   - final-round link  → selectedCount (final hires)
+      //   - first-round link  → applicantCount (initial shortlist; proxy
+      //                          for total applicants — the portal does not
+      //                          publish raw application numbers).
+      const finalUrls = [];
+      const firstUrls = [];
+      const firstLabels = [];
+      branchFiltered.forEach((row) => {
         const html = noticeHTMLs[row._origIdx];
-        if (!html) return null;
+        if (!html) { finalUrls.push(null); firstUrls.push(null); firstLabels.push(""); return; }
         const links = extractResultLinks(html);
-        return pickFinalLink(links)?.url || null;
+        const finalLink = pickFinalLink(links);
+        const firstLink = pickFirstRoundLink(links);
+        finalUrls.push(finalLink?.url || null);
+        // Skip first-round fetch when it would equal the final URL (single
+        // round listed — no separate initial shortlist exists).
+        const firstUrl = firstLink?.url || null;
+        firstUrls.push(firstUrl && firstUrl !== finalLink?.url ? firstUrl : null);
+        firstLabels.push(firstLink?.label || "");
       });
 
-      setProgress(`Fetching ${finalUrls.filter(Boolean).length} result pages...`);
-      const resultHTMLs = await withLimit(finalUrls, 8, fetchHTML, "Results");
+      setProgress(`Fetching ${finalUrls.filter(Boolean).length} final + ${firstUrls.filter(Boolean).length} first-round pages...`);
+      const [resultHTMLs, firstRoundHTMLs] = await Promise.all([
+        withLimit(finalUrls, 8, fetchHTML, "Final results"),
+        withLimit(firstUrls, 8, fetchHTML, "First round"),
+      ]);
 
       branchFiltered.forEach((row, i) => {
+        // Final round → selectedCount.
         let cands = [];
         try { if (resultHTMLs[i]) cands = parseResultPage(resultHTMLs[i]); }
         catch (e) { console.warn("parseResultPage failed for", row.company, e); }
@@ -989,10 +1045,20 @@ Do not invent fields not in the posting. Return strictly valid JSON, no prose.`;
         row.selectedCount = agg.count;
         row.selectedByBranch = agg.byBranch;
         row.selectedList = agg.list;
+
+        // First round → applicantCount (initial shortlist proxy).
+        let firstCands = [];
+        try { if (firstRoundHTMLs[i]) firstCands = parseResultPage(firstRoundHTMLs[i]); }
+        catch (e) { console.warn("parseResultPage (first round) failed for", row.company, e); }
+        const firstAgg = aggregateSelected(firstCands);
+        row.applicantCount = firstAgg.count;
+        row.applicantByBranch = firstAgg.byBranch;
+        row.applicantRoundLabel = firstLabels[i] || "";
       });
 
       const withResults = branchFiltered.filter((r) => r.selectedCount > 0).length;
-      setProgress(`Final results found for ${withResults} of ${branchFiltered.length} companies.`);
+      const withApplicants = branchFiltered.filter((r) => r.applicantCount > 0).length;
+      setProgress(`Final results: ${withResults}/${branchFiltered.length}; first-round counts: ${withApplicants}/${branchFiltered.length}.`);
     }
     branchFiltered.forEach((r) => delete r._origIdx);
 
