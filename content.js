@@ -7,6 +7,10 @@
 // don't use /resultlist/ URLs — find the panel by "Result" + "Last Updated"
 // co-occurrence, grab every anchor inside). Adds __BIT_TNP_INSPECT_NOTICE__
 // debug hook.
+// v6.1 (2.6.3): strict result-table picker (require Roll+Branch headers) and
+// per-row student validator — drops company-metadata rows like "TRAINING
+// AND PLACEMENT...", "Dead Line: …", URLs, and empty "()" entries that were
+// inflating selectedCount and polluting branch tallies.
 
 (function () {
   if (window.__BIT_TNP_LOADED__) return;
@@ -715,19 +719,62 @@
   // ---------- Result page parsing ----------
   // Uses textContent throughout — innerText is unreliable on DOMParser-detached
   // documents (they have no layout, so block-level joining doesn't work).
+
+  // Reject rows where the "name" field clearly isn't a person — common when
+  // we land on a notice page whose header has a Roll+Name+Branch-like table
+  // for company metadata (URL, Deadline, Posted By, etc.). NVIDIA bug: 6
+  // selected reported but 4 were "TRAINING AND PLACEMENT...", "Dead Line: 22-
+  // 09-2025", "NVIDIA Corporation (URL/www.nvidia.com)", and "()".
+  const NAME_BLOCKLIST_RE =
+    /^(?:training|placement|birla|mesra|recruitment|programme|department|institute|company\s*name|deadline|dead\s*line|url|website|posted\s*by|form\s*no|click\s*here|notification|important|update|notice|jaf-bitm|holiday)\b/i;
+
+  function isPlausibleStudentRow(row) {
+    const name = (row.name || "").trim();
+    const roll = (row.rollNo || "").trim();
+    // Strong roll signal: BIT formats like "BTECH/01234/22", "MTECH/IS/...",
+    // "IMSC/...", or plain 5+ digit numbers used by some campuses.
+    const looksLikeRoll = /^[A-Z]{2,8}[\/\-.][\w\/\-.]+/i.test(roll) || /^\d{5,}$/.test(roll);
+    // Validate name (when present).
+    if (name) {
+      if (name.length > 60) return false;
+      if (/@|www\.|https?:\/\//i.test(name)) return false;
+      if (NAME_BLOCKLIST_RE.test(name)) return false;
+      // Must have actual letters, not just punctuation / digits / "()".
+      const letterCount = (name.match(/[a-zA-Z]/g) || []).length;
+      if (letterCount < 3) return false;
+    }
+    return looksLikeRoll || (name && name.length >= 3 && (name.match(/[a-zA-Z]/g) || []).length >= 3);
+  }
+
   function parseResultPage(html) {
     if (!html) return [];
     const doc = new DOMParser().parseFromString(html, "text/html");
     const tables = Array.from(doc.querySelectorAll("table"));
-    let target = null;
+    // Tiered table selection:
+    //   Tier 1 (strong): Roll + Branch headers. The Roll No header is what
+    //     uniquely distinguishes a student-list table from a company-info
+    //     table on the BIT portal.
+    //   Tier 2 (weak): Name + Branch (some intern lists omit Roll).
+    // Among matches in the same tier, pick the one with most data rows.
+    let target = null, bestSize = 0;
+    let weakTarget = null, weakBestSize = 0;
     for (const t of tables) {
-      const h = (t.textContent || "").toLowerCase();
-      // Permissive: any table that has Name + Branch columns, or Roll + Branch.
-      if ((/\broll/.test(h) || /\bname\b/.test(h)) && /\bbranch\b/.test(h)) {
-        target = t;
-        break;
+      const headerRow = t.querySelector("thead tr") || t.querySelector("tr");
+      if (!headerRow) continue;
+      const headerCells = Array.from(headerRow.querySelectorAll("th, td"))
+        .map((c) => (c.textContent || "").toLowerCase().trim());
+      const hasRoll = headerCells.some((h) => /\broll/.test(h));
+      const hasName = headerCells.some((h) => /^name$|student.*name|candidate.*name/i.test(h));
+      const hasBranch = headerCells.some((h) => /\bbranch\b/.test(h));
+      if (!hasBranch) continue;
+      const nRows = t.querySelectorAll("tbody tr").length || (t.querySelectorAll("tr").length - 1);
+      if (hasRoll) {
+        if (nRows > bestSize) { target = t; bestSize = nRows; }
+      } else if (hasName) {
+        if (nRows > weakBestSize) { weakTarget = t; weakBestSize = nRows; }
       }
     }
+    if (!target) target = weakTarget;
     if (!target) return [];
 
     const headerRow = target.querySelector("thead tr") || target.querySelector("tr");
@@ -758,11 +805,22 @@
           branch: idx.branch >= 0 ? cells[idx.branch] : "",
           centre: idx.centre >= 0 ? cells[idx.centre] : "",
         };
-        // Drop rows that look like accidentally-matched non-data (no name and no roll).
-        if (!row.name && !row.rollNo) return null;
-        return row;
+        return isPlausibleStudentRow(row) ? row : null;
       })
       .filter(Boolean);
+  }
+
+  // Reject branches that are obviously URLs / numerics / metadata — these
+  // sneak in when the table's branch column contains stray values like
+  // "www.nvidia.com" on a header row (the row-level validator would
+  // normally drop those, but belt-and-suspenders).
+  function isPlausibleBranch(s) {
+    if (!s) return false;
+    if (s.length > 80) return false;
+    if (/@|www\.|https?:\/\//i.test(s)) return false;
+    if (/^\d/.test(s)) return false; // branches don't start with digits
+    if (!/[a-zA-Z]{2,}/.test(s)) return false;
+    return true;
   }
 
   function aggregateSelected(candidates) {
@@ -772,7 +830,8 @@
       .join("; ");
     const tally = {};
     candidates.forEach((c) => {
-      const k = c.branch || "Unknown";
+      const k = (c.branch || "").trim();
+      if (!isPlausibleBranch(k)) return;
       tally[k] = (tally[k] || 0) + 1;
     });
     return {

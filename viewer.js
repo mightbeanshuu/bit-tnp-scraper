@@ -217,6 +217,67 @@ function selectedGridHTML(r) {
   return `<div class="selected-grid">${items.map((it) => `<div>• ${escapeHtml(it)}</div>`).join("")}</div>`;
 }
 
+// Compact funnel chip for the collapsed card row.
+function funnelMiniHTML(r) {
+  const app = r.applicantCount || 0;
+  const sel = r.selectedCount || 0;
+  if (!app && !sel) return '<span class="empty">no rounds tracked yet</span>';
+  const conv = (app > 0 && sel > 0) ? ` <span class="conv">(${((sel / app) * 100).toFixed(0)}%)</span>` : "";
+  const appPart = app
+    ? `<span class="stat-pill app"><strong>${app}</strong> applied</span>`
+    : `<span class="stat-pill app empty"><strong>—</strong> applied</span>`;
+  const selPart = sel
+    ? `<span class="stat-pill sel"><strong>${sel}</strong> selected${conv}</span>`
+    : `<span class="stat-pill sel empty"><strong>—</strong> selected</span>`;
+  return `<span class="funnel-mini">${appPart}<span class="arrow">→</span>${selPart}</span>`;
+}
+
+// Full funnel panel for the expanded details section.
+function funnelPanelHTML(r) {
+  const app = r.applicantCount || 0;
+  const sel = r.selectedCount || 0;
+  if (!app && !sel) return "";
+  const conv = (app > 0 && sel > 0) ? `${((sel / app) * 100).toFixed(1)}% conversion` : "";
+  const appBranches = (r.applicantByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const selBranches = (r.selectedByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const renderTally = (arr, cls) => arr.length
+    ? `<div class="branch-tally ${cls}">${arr.map((s) => `<span class="b">${escapeHtml(s)}</span>`).join("")}</div>`
+    : `<div class="funnel-empty">— no branch data</div>`;
+
+  return `
+    <div class="funnel">
+      <div class="funnel-head">Selection funnel</div>
+      <div class="funnel-grid">
+        <div class="funnel-stat applicants">
+          <div class="label">Applicants</div>
+          <div class="value">${app || "—"}</div>
+          <div class="extra">${escapeHtml(r.applicantRoundLabel || "First-round shortlist")}</div>
+        </div>
+        <div class="funnel-arrow">→</div>
+        <div class="funnel-stat selected">
+          <div class="label">Final selected</div>
+          <div class="value">${sel || "—"}</div>
+          <div class="extra">${conv || "Final round"}</div>
+        </div>
+      </div>
+      <div class="funnel-branches">
+        <div class="col">
+          <h5>Applicants by branch</h5>
+          ${renderTally(appBranches, "")}
+        </div>
+        <div class="col">
+          <h5>Selected by branch</h5>
+          ${renderTally(selBranches, "sel")}
+        </div>
+      </div>
+      ${sel && r.selectedList ? `
+        <div class="funnel-list">
+          <h5>Selected students (${sel})</h5>
+          ${selectedGridHTML(r)}
+        </div>` : ""}
+    </div>`;
+}
+
 function compNumeric(s) {
   if (!s) return 0;
   // Strip everything but digits, dot — used to detect "are UG and PG different?".
@@ -273,16 +334,7 @@ function detailsHTML(r) {
         ${matchCourses.length ? `<div><strong>Matching your branches:</strong> ${matchCourses.map(escapeHtml).join(", ")}</div>` : ""}
         ${allCourses.length > matchCourses.length ? `<div style="color:var(--muted); margin-top: 6px;"><strong>All eligible:</strong> ${allCourses.map(escapeHtml).join(", ")}</div>` : ""}
       </div>` : ""}
-    ${r.applicantCount ? `
-      <h4>Applicants / first-round shortlist (${r.applicantCount})${r.applicantRoundLabel ? ` <span style="font-weight:400;color:var(--muted);">— ${escapeHtml(r.applicantRoundLabel)}</span>` : ""}</h4>
-      <div class="branch-tally">${(r.applicantByBranch || "").split(",").filter(Boolean)
-        .map((s) => `<span class="b">${escapeHtml(s.trim())}</span>`).join("")}</div>
-      ${r.selectedCount && r.applicantCount > 0 ? `<div class="body" style="margin-top:6px;">Conversion: <strong>${r.selectedCount}</strong> of <strong>${r.applicantCount}</strong> (${((r.selectedCount / r.applicantCount) * 100).toFixed(1)}%)</div>` : ""}` : ""}
-    ${r.selectedCount ? `
-      <h4>Selected candidates (${r.selectedCount})</h4>
-      <div class="branch-tally">${(r.selectedByBranch || "").split(",").filter(Boolean)
-        .map((s) => `<span class="b">${escapeHtml(s.trim())}</span>`).join("")}</div>
-      ${selectedGridHTML(r)}` : ""}
+    ${funnelPanelHTML(r)}
     <h4>Links</h4>
     <div class="body">
       ${r.viewApplyUrl ? `<a href="${escapeHtml(r.viewApplyUrl)}" target="_blank">View posting (apply page) ↗</a><br/>` : ""}
@@ -304,12 +356,9 @@ function cardHTML(r, idx) {
   const infoRows = [];
   if (branches) infoRows.push(`<div class="info-row" data-key="branches"><span class="ilabel">Branches</span><span class="ival">${branches}</span></div>`);
   if (cgpa) infoRows.push(`<div class="info-row" data-key="cgpa"><span class="ilabel">CGPA</span><span class="ival">${cgpa}</span></div>`);
-  // Applicants = first-round shortlist count (proxy; portal doesn't publish raw applies).
-  if (r.applicantCount) {
-    const lbl = r.applicantRoundLabel ? ` <span class="empty">(${escapeHtml(r.applicantRoundLabel)})</span>` : "";
-    infoRows.push(`<div class="info-row" data-key="applicants"><span class="ilabel">Applicants</span><span class="ival"><strong>${r.applicantCount}</strong>${lbl}</span></div>`);
-  }
-  infoRows.push(`<div class="info-row" data-key="selected"><span class="ilabel">Selected</span><span class="ival">${r.selectedCount ? `<strong>${r.selectedCount}</strong> · ${escapeHtml(r.selectedByBranch || "—")}` : '<span class="empty">no final result yet</span>'}</span></div>`);
+  // Single Funnel row replaces the old Applicants + Selected rows — keeps
+  // the card tidy and makes the applied → selected progression obvious.
+  infoRows.push(`<div class="info-row" data-key="funnel"><span class="ilabel">Funnel</span><span class="ival">${funnelMiniHTML(r)}</span></div>`);
   if (r.skillSet) infoRows.push(`<div class="info-row" data-key="skills"><span class="ilabel">Skills</span><span class="ival">${escapeHtml(r.skillSet)}</span></div>`);
 
   const cardClass = (r.selectedCount && r.selectedCount > 0) ? "card has-sel" : "card";
