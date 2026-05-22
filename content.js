@@ -231,10 +231,51 @@
     return t;
   }
 
-  // Some companies (FTE roles like VISA) publish salary as a TABLE with
-  // columns Programmes / CTC / Basic Pay / Joining Bonus / RSU / ESOP, and rows
-  // UG / PG. The header-keyword-then-number regex misses these because the
-  // word 'CTC' is in a header cell, far from the actual value in a data cell.
+  // Scan a block of text for the LARGEST CTC-adjacent number. The free-text
+  // parser used to match only the first occurrence — postings that list
+  // "Base CTC: 18 LPA" before "Total CTC: 35 LPA" got under-parsed by half.
+  // Keywords: CTC, Total CTC, Total Package, Total Compensation, Total Pay,
+  // Annual Pay, Gross CTC, Gross Package. Returns the raw matched value
+  // string so downstream parseAnnualPay can apply unit logic.
+  function extractMaxCTC(text) {
+    if (!text) return null;
+    const re = /(?:total\s*(?:ctc|package|compensation|comp|pay)|\bctc\b|annual\s*pay|gross\s*(?:ctc|package))[\s\S]{0,15}?(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi;
+    let bestText = null, bestValue = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const raw = m[1].trim().replace(/\s+/g, " ");
+      const v = parseAnnualPay(raw);
+      if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
+    }
+    return bestText;
+  }
+
+  // Same as extractMaxCTC, but for fixed/base/basic pay. Meesho's table puts
+  // ₹0 in the Basic Pay column and "Fixed: 14,00,000" in the Other Details
+  // column; without this we report basePay as 0.
+  function extractFixedPay(text) {
+    if (!text) return null;
+    const re = /(?:fixed\s*(?:pay|comp(?:ensation)?)?|base\s*(?:pay|salary)|basic\s*(?:pay|salary))[\s\S]{0,10}?(?:₹|rs\.?|inr)?\s*([\d][\d,.]*\s*(?:LPA|Lakhs?|Lacs?|Cr|Crore|L|K)?)/gi;
+    let bestText = null, bestValue = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const raw = m[1].trim().replace(/\s+/g, " ");
+      const v = parseAnnualPay(raw);
+      if (v != null && v > bestValue) { bestValue = v; bestText = raw; }
+    }
+    return bestText;
+  }
+
+  // Some companies (FTE roles like VISA, Meesho) publish salary as a TABLE
+  // with columns Programmes / CTC / Basic Pay / Joining Bonus / RSU / ESOP /
+  // Other Details, and rows UG / PG. The header-keyword-then-number regex
+  // misses these because the word 'CTC' is in a header cell, far from the
+  // actual value in a data cell.
+  //
+  // The "Other Details / Benefits" column often contains the authoritative
+  // breakdown (e.g., "Fixed: 14,00,000 ... CTC: 23,50,000") even when the
+  // main CTC/Basic Pay cells are missing or under-stated. We cross-check
+  // both and take the larger value.
   function parseSalaryTable(doc) {
     const tables = Array.from(doc.querySelectorAll("table"));
     for (const t of tables) {
@@ -244,10 +285,14 @@
         if (firstTr) headerCells = Array.from(firstTr.querySelectorAll("th, td"));
       }
       const headers = headerCells.map((c) => (c.textContent || "").trim().toLowerCase());
-      const ctcIdx = headers.findIndex((h) => /\bctc\b/.test(h) || /^total\s*pay$/.test(h));
+      // Prefer "Total CTC" / "Total Pay" / "Total Package" over plain "CTC"
+      // when both columns exist.
+      let ctcIdx = headers.findIndex((h) => /\btotal\s*(?:ctc|pay|comp(?:ensation)?|package)\b/.test(h));
+      if (ctcIdx < 0) ctcIdx = headers.findIndex((h) => /\bctc\b/.test(h));
       if (ctcIdx < 0) continue;
-      const basePayIdx = headers.findIndex((h) => /basic\s*pay|base\s*pay/.test(h));
-      const programIdx = headers.findIndex((h) => /programm?es?|category/.test(h));
+      const basePayIdx = headers.findIndex((h) => /basic\s*pay|base\s*pay|fixed\s*pay/.test(h));
+      const programIdx = headers.findIndex((h) => /programm?es?|category|level/.test(h));
+      const otherIdx = headers.findIndex((h) => /other.*(?:detail|benefit)|^benefits?$|^remarks?$|^notes?$/.test(h));
 
       const allRows = t.querySelector("thead")
         ? Array.from(t.querySelectorAll("tbody tr"))
@@ -265,8 +310,28 @@
         const programText = programIdx >= 0
           ? (cells[programIdx]?.textContent || "").trim().toLowerCase()
           : (cells[0]?.textContent || "").trim().toLowerCase();
-        const ctcText = (cells[ctcIdx]?.textContent || "").trim().replace(/\s+/g, " ");
-        const bpText = basePayIdx >= 0 ? (cells[basePayIdx]?.textContent || "").trim().replace(/\s+/g, " ") : "";
+        let ctcText = (cells[ctcIdx]?.textContent || "").trim().replace(/\s+/g, " ");
+        let bpText = basePayIdx >= 0 ? (cells[basePayIdx]?.textContent || "").trim().replace(/\s+/g, " ") : "";
+
+        // Cross-check the Other Details/Benefits column — if it contains a
+        // CTC mention with a larger value than the main column, prefer it.
+        // Same for Fixed/Base pay (catches Meesho's ₹0 Basic Pay + "Fixed: 14L"
+        // in the notes column).
+        if (otherIdx >= 0 && cells[otherIdx]) {
+          const otherText = cells[otherIdx].textContent || "";
+          const altCTC = extractMaxCTC(otherText);
+          if (altCTC) {
+            const mainVal = parseAnnualPay(ctcText) || 0;
+            const altVal = parseAnnualPay(altCTC) || 0;
+            if (altVal > mainVal) ctcText = altCTC;
+          }
+          const bpMainVal = parseAnnualPay(bpText) || 0;
+          if (bpMainVal <= 0) {
+            const altBP = extractFixedPay(otherText);
+            if (altBP) bpText = altBP;
+          }
+        }
+
         if (!/\d/.test(ctcText)) continue;
         if (/\bug\b/.test(programText)) { out.ugCTC = ctcText; out.ugBasePay = bpText; }
         else if (/\bpg\b/.test(programText)) { out.pgCTC = ctcText; out.pgBasePay = bpText; }
@@ -327,18 +392,23 @@
       data.basePay = salaryTable.ugBasePay || salaryTable.pgBasePay || "";
     }
 
-    // Fallback: free-text regex for inline salary mentions.
+    // Fallback: free-text scan for inline salary mentions. We scan the
+    // SALARY DETAILS / CTC DETAILS / REMUNERATION section (or the whole
+    // body if no such section exists) for the LARGEST CTC-adjacent value.
+    // Picking the max — not the first match — handles postings that list
+    // base/fixed pay before the total, like "Base CTC: 18 LPA ... Total
+    // CTC: 35 LPA".
     const salary = getSection(bodyText, "SALARY DETAILS") ||
                    getSection(bodyText, "CTC DETAILS") ||
                    getSection(bodyText, "REMUNERATION");
     const sText = salary || bodyText;
     if (!data.ctc) {
-      const m = sText.match(/(?:CTC|Total\s*Pay|Package)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (m) data.ctc = m[1].trim().replace(/\s+/g, " ");
+      const best = extractMaxCTC(sText);
+      if (best) data.ctc = best;
     }
     if (!data.basePay) {
-      const m = sText.match(/(?:Base\s*Pay|Base\s*Salary|Fixed\s*Pay)[:\s]*([₹]?\s*[\d.,]+\s*(?:LPA|Lakh|Lac|Cr|Crore)?)/i);
-      if (m) data.basePay = m[1].trim().replace(/\s+/g, " ");
+      const best = extractFixedPay(sText);
+      if (best) data.basePay = best;
     }
 
     const elig = getSection(bodyText, "ELIGIBILITY");
