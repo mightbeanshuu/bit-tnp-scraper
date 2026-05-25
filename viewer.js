@@ -1,666 +1,628 @@
+// State
 let allRows = [];
-let maxLPA = 100;
-let viewMode = "list"; // "list" | "grid"
+let filteredRows = [];
+let viewMode = 'grid'; // 'grid' | 'list'
+let selectedBranches = new Set();
+let maxCtcPossible = 100;
+let currentMinCtc = 0;
+let currentMaxCtc = 100;
 
-const $ = (id) => document.getElementById(id);
+const branchList = ["CSE", "ECE", "EEE", "MECH", "CIVIL", "PROD", "CHEM", "BIO", "AIML", "MnC", "PHY", "QED"];
 
+// DOM Elements
+const $ = id => document.getElementById(id);
+const searchInput = $('searchInput');
+const clearSearch = $('clearSearch');
+const sortBySelect = $('sortBySelect');
+const branchToggleBtn = $('branchToggleBtn');
+const branchDropdown = $('branchDropdown');
+const branchCheckboxContainer = $('branchCheckboxContainer');
+const resetBranchesBtn = $('resetBranchesBtn');
+const selectedBranchesLabel = $('selectedBranchesLabel');
+const viewModeList = $('viewModeList');
+const viewModeGrid = $('viewModeGrid');
+const exportCsvBtn = $('exportCsvBtn');
+const printDossierBtn = $('printDossierBtn');
+const minCbcSlider = $('minCbcSlider');
+const maxCbcSlider = $('maxCbcSlider');
+const sliderTrackActive = $('sliderTrackActive');
+const sliderValueLabel = $('sliderValueLabel');
+const noticesContainer = $('noticesContainer');
+const btnGenerateInsights = $('btnGenerateInsights');
+const aiReportWrap = $('aiReportWrap');
+const aiReportBox = $('aiReportBox');
+const aiBtnText = $('aiBtnText');
+
+// Utilities
 function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]);
 }
 
-function compValue(r) {
-  return (typeof r.annualCTC === "number" && isFinite(r.annualCTC)) ? r.annualCTC : null;
-}
-
-function compInLPA(r) {
-  const v = compValue(r);
-  return v == null ? null : v / 100000;
-}
-
-function payDisplay(r) {
-  // Always show the parsed annualCTCDisplay (e.g. "₹8.00 LPA") when available.
-  // For monthly stipends, prepend the per-month figure so users see both.
-  if (r.compSource === "stipendx12" && r.stipendUG) {
-    return `₹${r.stipendUG}/mo · ${r.annualCTCDisplay || ""}`.trim();
+function parseLPA(r) {
+  if (typeof r.annualCTC === "number" && isFinite(r.annualCTC)) {
+    return r.annualCTC / 100000;
   }
-  if (r.annualCTCDisplay) return r.annualCTCDisplay;
-  // Fallbacks if parser had no luck.
-  if (r.ctc) return r.ctc;
-  if (r.basePay) return r.basePay;
-  if (r.stipendUG) return `₹${r.stipendUG}/mo`;
-  return "—";
+  return 0; // default to 0 if unknown
 }
 
-function deriveBranchSet(rows) {
-  const set = new Set();
-  rows.forEach((r) => {
-    (r.courses || "").split(",").forEach((s) => {
-      const t = s.trim();
-      if (t) set.add(t);
-    });
-  });
-  return [...set];
+function extractBranches(r) {
+  const str = (r.courses || r.matchingCourses || r.criteriaUG || "").toUpperCase();
+  const rawList = ["CSE", "ECE", "EEE", "IT", "MECH", "CIVIL", "PROD", "CHEM", "BIO", "PIE", "AI", "MATH", "PHY", "QED"];
+  const branchAliases = { "IT": "CSE", "PIE": "PROD", "AI": "AIML", "MATH": "MnC" };
+  const matches = rawList.filter(b => str.includes(b));
+  const mapped = matches.map(b => branchAliases[b] || b);
+  return [...new Set(mapped)];
 }
 
+function formatLPA(val) {
+  if (val == null || isNaN(val) || val === 0) return "N/A";
+  return `₹${val.toFixed(2)} LPA`;
+}
+
+// Initialization
 (async () => {
-  // Version pill: read from manifest — single source of truth so bumping
-  // manifest.json automatically updates the UI.
   try {
     const v = chrome.runtime.getManifest()?.version;
-    if (v) document.getElementById("versionPill").textContent = "v" + v;
+    if (v) $('versionPill').textContent = "v" + v;
   } catch {}
-  const data = await chrome.storage.local.get(["lastScrape"]);
+
+  const data = await chrome.storage.local.get(["lastScrape", "filterMin", "filterMax"]);
   const last = data.lastScrape;
+
   if (!last || !last.rows || !last.rows.length) {
-    document.getElementById("cards").innerHTML =
-      `<div class="empty">No scrape data found yet.<br/>Open the extension popup, run a scrape, then click "Open Viewer".</div>`;
+    noticesContainer.innerHTML = `<div class="col-span-full text-center text-zinc-500 py-10">No scrape data found yet. Run a scrape from the extension popup first.</div>`;
     return;
   }
-  allRows = last.rows;
-  $("stamp").textContent = `Scraped ${new Date(last.timestamp).toLocaleString()}`;
-  const branches = last.options?.branches || {};
-  const enabled = Object.entries(branches).filter(([, v]) => v).map(([k]) => k);
-  $("branchPill").textContent = enabled.length ? `Branches: ${enabled.join(" / ")}` : "All branches";
-
-  initSlider();
+  
+  allRows = last.rows.map(r => ({
+    ...r,
+    lpa: parseLPA(r),
+    branchArr: extractBranches(r)
+  }));
+  
+  initDualSlider(data.filterMin, data.filterMax);
+  initBranchDropdown();
   bindEvents();
-  render();
+  
+  applyFiltersAndRender();
 })();
 
-function initSlider() {
-  const valid = allRows.map(compInLPA).filter((v) => v != null);
-  maxLPA = valid.length ? Math.max(...valid) : 100;
-  maxLPA = Math.ceil(maxLPA);
-  $("minRange").max = maxLPA;
-  $("maxRange").max = maxLPA;
-  $("minRange").value = 0;
-  $("maxRange").value = maxLPA;
+function initDualSlider(savedMin, savedMax) {
+  if (!minCbcSlider || !maxCbcSlider) return;
+  const valid = allRows.map(r => r.lpa).filter(v => v > 0);
+  maxCtcPossible = valid.length ? Math.ceil(Math.max(...valid)) : 100;
+  
+  // Parse inputs handles strings/numbers/NaNs nicely
+  let parsedMin = parseFloat(savedMin);
+  let parsedMax = parseFloat(savedMax);
+  
+  currentMinCtc = (!isNaN(parsedMin)) ? parsedMin : 0;
+  currentMaxCtc = (!isNaN(parsedMax)) ? parsedMax : maxCtcPossible;
+
+  if (currentMaxCtc > maxCtcPossible) currentMaxCtc = maxCtcPossible;
+  if (currentMinCtc > currentMaxCtc) currentMinCtc = 0;
+
+  minCbcSlider.max = maxCtcPossible;
+  maxCbcSlider.max = maxCtcPossible;
+  minCbcSlider.value = currentMinCtc;
+  maxCbcSlider.value = currentMaxCtc;
+
   updateSliderUI();
 }
 
 function updateSliderUI() {
-  const min = parseFloat($("minRange").value);
-  const max = parseFloat($("maxRange").value);
-  $("rangeDisplay").textContent = `₹${min} LPA – ₹${max} LPA`;
-  const leftPct = (min / maxLPA) * 100;
-  const rightPct = 100 - (max / maxLPA) * 100;
-  $("active").style.left = leftPct + "%";
-  $("active").style.right = rightPct + "%";
+  const minPercent = (currentMinCtc / maxCtcPossible) * 100;
+  const maxPercent = (currentMaxCtc / maxCtcPossible) * 100;
+  sliderTrackActive.style.left = `${minPercent}%`;
+  sliderTrackActive.style.right = `${100 - maxPercent}%`;
+  sliderValueLabel.textContent = `₹${currentMinCtc} LPA - ₹${currentMaxCtc}${currentMaxCtc === maxCtcPossible ? '+' : ''} LPA`;
+}
+
+function initBranchDropdown() {
+  branchCheckboxContainer.innerHTML = '';
+  branchList.forEach(br => {
+    const lbl = document.createElement('label');
+    lbl.className = 'flex items-center justify-between p-1.5 hover:bg-[#1e1e24] rounded cursor-pointer transition-colors';
+    lbl.innerHTML = `
+      <span class="text-xs text-zinc-300 font-medium">${br}</span>
+      <input type="checkbox" value="${br}" class="form-checkbox text-zinc-500 rounded bg-[#0b0b0e] border-[#27272a] focus:ring-0 focus:ring-offset-0 w-3.5 h-3.5">
+    `;
+    const cb = lbl.querySelector('input');
+    cb.addEventListener('change', (e) => {
+      if (e.target.checked) selectedBranches.add(br);
+      else selectedBranches.delete(br);
+      updateBranchLabel();
+      applyFiltersAndRender();
+    });
+    branchCheckboxContainer.appendChild(lbl);
+  });
+}
+
+function updateBranchLabel() {
+  if (selectedBranches.size === 0) {
+    selectedBranchesLabel.textContent = 'Branches: All Active';
+    selectedBranchesLabel.classList.remove('text-white');
+  } else {
+    selectedBranchesLabel.textContent = `Branches: ${selectedBranches.size} Selected`;
+    selectedBranchesLabel.classList.add('text-white');
+  }
 }
 
 function bindEvents() {
-  $("minRange").addEventListener("input", () => {
-    let min = parseFloat($("minRange").value);
-    const max = parseFloat($("maxRange").value);
-    if (min > max) { $("minRange").value = max; min = max; }
-    updateSliderUI();
-    render();
+  searchInput.addEventListener('input', () => {
+    clearSearch.classList.toggle('hidden', searchInput.value.trim() === '');
+    applyFiltersAndRender();
   });
-  $("maxRange").addEventListener("input", () => {
-    const min = parseFloat($("minRange").value);
-    let max = parseFloat($("maxRange").value);
-    if (max < min) { $("maxRange").value = min; max = min; }
-    updateSliderUI();
-    render();
+  
+  clearSearch.addEventListener('click', () => {
+    searchInput.value = '';
+    clearSearch.classList.add('hidden');
+    applyFiltersAndRender();
   });
-  $("search").addEventListener("input", render);
-  $("sort").addEventListener("change", render);
 
-  document.addEventListener("click", (e) => {
-    if (e.target.closest("a")) return;       // don't intercept link clicks
-    if (e.target.closest(".modal")) return;  // don't toggle when clicking inside modal
-    const card = e.target.closest(".card");
-    if (!card) return;
-    const idx = parseInt(card.getAttribute("data-idx"), 10);
-    if (viewMode === "grid") {
-      openModal(idx);
-    } else {
-      card.classList.toggle("expanded");
+  sortBySelect.addEventListener('change', applyFiltersAndRender);
+
+  branchToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    branchDropdown.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!branchToggleBtn.contains(e.target) && !branchDropdown.contains(e.target)) {
+      branchDropdown.classList.add('hidden');
     }
   });
-}
 
-function applyFilters(rows) {
-  const min = parseFloat($("minRange").value);
-  const max = parseFloat($("maxRange").value);
-  const q = $("search").value.trim().toLowerCase();
-  return rows.filter((r) => {
-    const lpa = compInLPA(r);
-    // Keep unknown-pay rows when min is 0 (no lower bound).
-    if (lpa == null) {
-      if (min > 0) return false;
-    } else {
-      if (lpa < min || lpa > max) return false;
-    }
-    if (q) {
-      const hay = [
-        r.company, r.designation, r.placeOfPosting,
-        r.courses, r.jdSummary, r.jobDescription,
-      ].join(" ").toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
+  resetBranchesBtn.addEventListener('click', () => {
+    selectedBranches.clear();
+    branchCheckboxContainer.querySelectorAll('input').forEach(cb => cb.checked = false);
+    updateBranchLabel();
+    applyFiltersAndRender();
   });
-}
 
-function applySort(rows) {
-  const mode = $("sort").value;
-  const arr = rows.slice();
-  if (mode === "ctc-asc") arr.sort((a, b) => (compValue(a) || 0) - (compValue(b) || 0));
-  else if (mode === "ctc-desc") arr.sort((a, b) => (compValue(b) || 0) - (compValue(a) || 0));
-  else if (mode === "selected-desc") arr.sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0));
-  else if (mode === "applicants-desc") arr.sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0));
-  else if (mode === "deadline") arr.sort((a, b) => parseDeadline(a.deadline) - parseDeadline(b.deadline));
-  else if (mode === "company-asc") arr.sort((a, b) => (a.company || "").localeCompare(b.company || ""));
-  return arr;
-}
-
-function parseDeadline(s) {
-  if (!s) return Infinity;
-  // Handle dd/mm/yyyy or dd-mm-yyyy
-  const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-  if (!m) return Infinity;
-  let [, d, mo, y] = m;
-  if (y.length === 2) y = "20" + y;
-  return new Date(`${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`).getTime() || Infinity;
-}
-
-function selectedBadge(r) {
-  // Hide entirely when 0 — keeps the card clean. Cards without a badge
-  // also won't have the extra top-padding (via .has-sel class).
-  if (!r.selectedCount || r.selectedCount <= 0) return "";
-  return `<span class="sel-corner" title="Final-round selected candidates">✓ ${r.selectedCount} selected</span>`;
-}
-
-function formatCGPA(s) {
-  if (!s) return null;
-  // Strip non-numeric chars ("7 cg" → "7", "7.0CG" → "7.0").
-  const cleaned = String(s).replace(/[^\d.]/g, "");
-  const n = parseFloat(cleaned);
-  if (isNaN(n) || n <= 0 || n > 10) return null;
-  return n.toFixed(2);
-}
-
-function cgpaCardDisplay(r) {
-  const raw = r.criteriaUG || "";
-  // If criteria text has multiple CGPA references (e.g. DE Shaw's
-  // "7 CGPA (CS, IT) and 8 CGPA (Circuital branches)"), show it raw —
-  // any single-number parse would be misleading.
-  const cgpaMentions = (raw.match(/\bCGPA\b/gi) || []).length;
-  if (cgpaMentions >= 2) return escapeHtml(raw.slice(0, 220));
-
-  const circ = formatCGPA(r.cgpaCirc);
-  const nonCirc = formatCGPA(r.cgpaNonCirc);
-  if (circ && nonCirc) {
-    return `Circuital <strong>${circ}</strong> · Non-circuital <strong>${nonCirc}</strong>`;
-  }
-  if (circ) return `Circuital <strong>${circ}</strong>`;
-  if (nonCirc) return `Non-circuital <strong>${nonCirc}</strong>`;
-  if (raw) return escapeHtml(raw.slice(0, 120));
-  return "";
-}
-
-function matchingCoursesDisplay(r) {
-  // Prefer pre-computed matchingCourses (only branches the user filtered for).
-  const src = r.matchingCourses || r.courses || "";
-  const list = src.split(",").map((s) => s.trim()).filter(Boolean);
-  if (list.length === 0) return "";
-  if (list.length <= 5) return list.map((c) => escapeHtml(c)).join(", ");
-  return list.slice(0, 5).map((c) => escapeHtml(c)).join(", ") + ` <em>+${list.length - 5} more</em>`;
-}
-
-function selectedGridHTML(r) {
-  if (!r.selectedList) return "";
-  const items = r.selectedList.split(";").map((s) => s.trim()).filter(Boolean);
-  return `<div class="selected-grid">${items.map((it) => `<div>• ${escapeHtml(it)}</div>`).join("")}</div>`;
-}
-
-// Compact funnel chip for the collapsed card row.
-function funnelMiniHTML(r) {
-  const app = r.applicantCount || 0;
-  const sel = r.selectedCount || 0;
-  const sources = r.sourcesChecked || 0;
-  if (!app && !sel) {
-    return sources > 0
-      ? `<span class="empty">checked ${sources} source${sources === 1 ? "" : "s"} — no published results yet</span>`
-      : '<span class="empty">no rounds published yet</span>';
-  }
-  const conv = (app > 0 && sel > 0) ? ` <span class="conv">(${((sel / app) * 100).toFixed(0)}%)</span>` : "";
-  const appPart = app
-    ? `<span class="stat-pill app"><strong>${app}</strong> applied</span>`
-    : `<span class="stat-pill app empty"><strong>—</strong> applied</span>`;
-  const selPart = sel
-    ? `<span class="stat-pill sel"><strong>${sel}</strong> selected${conv}</span>`
-    : `<span class="stat-pill sel empty"><strong>—</strong> selected</span>`;
-  return `<span class="funnel-mini">${appPart}<span class="arrow">→</span>${selPart}</span>`;
-}
-
-// Full funnel panel for the expanded details section.
-function funnelPanelHTML(r) {
-  const app = r.applicantCount || 0;
-  const sel = r.selectedCount || 0;
-  const sources = r.sourcesChecked || 0;
-
-  // Empty state — be explicit about WHY (helps user distinguish "no results
-  // published yet" from "scraper bug"). Always render the panel so the user
-  // sees a consistent layout.
-  if (!app && !sel) {
-    const msg = sources > 0
-      ? `Checked ${sources} result source${sources === 1 ? "" : "s"} for this company — no parsable student lists yet. The TNP team usually publishes selects after each round concludes; re-scrape later.`
-      : `No result-list URLs published yet on this company's notice page. The TNP team adds these after each round concludes.`;
-    return `
-      <div class="funnel">
-        <div class="funnel-head">Selection funnel</div>
-        <div class="funnel-empty" style="text-align:center; padding: 12px 4px;">${msg}</div>
-      </div>`;
-  }
-
-  const conv = (app > 0 && sel > 0) ? `${((sel / app) * 100).toFixed(1)}% conversion` : "";
-  const appBranches = (r.applicantByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const selBranches = (r.selectedByBranch || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const renderTally = (arr, cls) => arr.length
-    ? `<div class="branch-tally ${cls}">${arr.map((s) => `<span class="b">${escapeHtml(s)}</span>`).join("")}</div>`
-    : `<div class="funnel-empty">— no branch data</div>`;
-
-  return `
-    <div class="funnel">
-      <div class="funnel-head">Selection funnel</div>
-      <div class="funnel-grid">
-        <div class="funnel-stat applicants">
-          <div class="label">Applicants</div>
-          <div class="value">${app || "—"}</div>
-          <div class="extra">${escapeHtml(r.applicantRoundLabel || "First-round shortlist")}</div>
-        </div>
-        <div class="funnel-arrow">→</div>
-        <div class="funnel-stat selected">
-          <div class="label">Final selected</div>
-          <div class="value">${sel || "—"}</div>
-          <div class="extra">${conv || "Final round"}</div>
-        </div>
-      </div>
-      <div class="funnel-branches">
-        <div class="col">
-          <h5>Applicants by branch</h5>
-          ${renderTally(appBranches, "")}
-        </div>
-        <div class="col">
-          <h5>Selected by branch</h5>
-          ${renderTally(selBranches, "sel")}
-        </div>
-      </div>
-      ${sel && r.selectedList ? `
-        <div class="funnel-list">
-          <h5>Selected students (${sel})</h5>
-          ${selectedGridHTML(r)}
-        </div>` : ""}
-    </div>`;
-}
-
-function compNumeric(s) {
-  if (!s) return 0;
-  // Strip everything but digits, dot — used to detect "are UG and PG different?".
-  const cleaned = String(s).replace(/[^\d.]/g, "");
-  return parseFloat(cleaned) || 0;
-}
-
-function detailsHTML(r) {
-  const cgpa = cgpaCardDisplay(r);
-  const allCourses = (r.courses || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const matchCourses = (r.matchingCourses || "").split(",").map((s) => s.trim()).filter(Boolean);
-
-  // CTC display: if UG and PG values are both set AND differ, show them as
-  // two separate rows. Otherwise collapse to one "CTC" line (the common case).
-  // Same logic for Base Pay.
-  const ctcLines = [];
-  if (r.ugCTC && r.pgCTC && compNumeric(r.ugCTC) !== compNumeric(r.pgCTC)) {
-    ctcLines.push(`<strong>CTC (UG):</strong> ${escapeHtml(r.ugCTC)}`);
-    ctcLines.push(`<strong>CTC (PG):</strong> ${escapeHtml(r.pgCTC)}`);
-  } else if (r.ctc) {
-    ctcLines.push(`<strong>CTC:</strong> ${escapeHtml(r.ctc)}`);
-  }
-  const bpLines = [];
-  if (r.ugBasePay && r.pgBasePay && compNumeric(r.ugBasePay) !== compNumeric(r.pgBasePay)) {
-    bpLines.push(`<strong>Base Pay (UG):</strong> ${escapeHtml(r.ugBasePay)}`);
-    bpLines.push(`<strong>Base Pay (PG):</strong> ${escapeHtml(r.pgBasePay)}`);
-  } else if (r.basePay && compNumeric(r.basePay) > 0) {
-    bpLines.push(`<strong>Base Pay:</strong> ${escapeHtml(r.basePay)}`);
-  }
-
-  return `
-    ${r.skillSet ? `<h4>Required SkillSet</h4><div class="body">${escapeHtml(r.skillSet)}</div>` : ""}
-    ${r.jobDescription ? `<h4>Full Job Description</h4><div class="body">${escapeHtml(r.jobDescription)}</div>` : ""}
-    ${(r.stipendUG || r.stipendPG || r.basePay || r.ctc || r.bonus) ? `
-      <h4>Compensation breakdown</h4>
-      <div class="body">${[
-        ...ctcLines,
-        ...bpLines,
-        r.bonus ? `<strong>Bonus / Variable:</strong> ${escapeHtml(r.bonus)}` : "",
-        r.stipendUG ? `<strong>Stipend UG:</strong> ₹${escapeHtml(r.stipendUG)}/month` : "",
-        r.stipendPG ? `<strong>Stipend PG:</strong> ₹${escapeHtml(r.stipendPG)}/month` : "",
-        r.annualCTCDisplay ? `<strong>Annual CTC equivalent:</strong> ${escapeHtml(r.annualCTCDisplay)}` : "",
-      ].filter(Boolean).join("<br/>")}</div>` : ""}
-    ${cgpa ? `<h4>CGPA Cutoff</h4><div class="body">${cgpa}</div>` : ""}
-    ${(r.criteriaUG || r.criteriaPG) ? `
-      <h4>Eligibility criteria (raw)</h4>
-      <div class="body">${[
-        r.criteriaUG ? `UG: ${escapeHtml(r.criteriaUG)}` : "",
-        r.criteriaPG ? `PG: ${escapeHtml(r.criteriaPG)}` : "",
-      ].filter(Boolean).join("<br/>")}</div>` : ""}
-    ${matchCourses.length || allCourses.length ? `
-      <h4>Eligible courses</h4>
-      <div class="body">
-        ${matchCourses.length ? `<div><strong>Matching your branches:</strong> ${matchCourses.map(escapeHtml).join(", ")}</div>` : ""}
-        ${allCourses.length > matchCourses.length ? `<div style="color:var(--muted); margin-top: 6px;"><strong>All eligible:</strong> ${allCourses.map(escapeHtml).join(", ")}</div>` : ""}
-      </div>` : ""}
-    ${funnelPanelHTML(r)}
-    <h4>Links</h4>
-    <div class="body">
-      ${r.viewApplyUrl ? `<a href="${escapeHtml(r.viewApplyUrl)}" target="_blank">View posting (apply page) ↗</a><br/>` : ""}
-      ${r.updatesUrl ? `<a href="${escapeHtml(r.updatesUrl)}" target="_blank">Updates / Notifications ↗</a><br/>` : ""}
-      ${r.companyURL ? `<a href="${escapeHtml(/^https?:/i.test(r.companyURL) ? r.companyURL : "https://" + r.companyURL)}" target="_blank">Company website ↗</a>` : ""}
-    </div>`;
-}
-
-function cardHTML(r, idx) {
-  const pay = payDisplay(r);
-  const subline = [r.designation, r.placeOfPosting].filter(Boolean).join(" · ");
-  const summary = r.jdSummary || "";
-
-  const badges = [];
-  if (r.type) badges.push(`<span class="badge type">${escapeHtml(r.type)}</span>`);
-  const cgpa = cgpaCardDisplay(r);
-  const branches = matchingCoursesDisplay(r);
-
-  const infoRows = [];
-  if (branches) infoRows.push(`<div class="info-row" data-key="branches"><span class="ilabel">Branches</span><span class="ival">${branches}</span></div>`);
-  if (cgpa) infoRows.push(`<div class="info-row" data-key="cgpa"><span class="ilabel">CGPA</span><span class="ival">${cgpa}</span></div>`);
-  // Single Funnel row replaces the old Applicants + Selected rows — keeps
-  // the card tidy and makes the applied → selected progression obvious.
-  infoRows.push(`<div class="info-row" data-key="funnel"><span class="ilabel">Funnel</span><span class="ival">${funnelMiniHTML(r)}</span></div>`);
-  if (r.skillSet) infoRows.push(`<div class="info-row" data-key="skills"><span class="ilabel">Skills</span><span class="ival">${escapeHtml(r.skillSet)}</span></div>`);
-
-  const cardClass = (r.selectedCount && r.selectedCount > 0) ? "card has-sel" : "card";
-  return `<div class="${cardClass}" data-idx="${idx}">
-    ${selectedBadge(r)}
-    <div class="card-head">
-      <span class="name">${escapeHtml(r.company)}</span>
-      <span class="pay">${escapeHtml(pay)}</span>
-    </div>
-    ${subline ? `<div class="card-sub">${escapeHtml(subline)}</div>` : ""}
-    ${badges.length ? `<div class="badges">${badges.join("")}</div>` : ""}
-    <div class="info-rows">${infoRows.join("")}</div>
-    ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ""}
-    <div class="toggle-hint">Click for full details ↓</div>
-    <div class="pay-only">
-      <span class="pay-label">Pay</span>
-      <span class="pay">${escapeHtml(pay)}</span>
-    </div>
-    <div class="details">${detailsHTML(r)}</div>
-  </div>`;
-}
-
-let lastFiltered = [];
-
-function render() {
-  lastFiltered = applySort(applyFilters(allRows));
-  $("counter").textContent = `${lastFiltered.length} of ${allRows.length}`;
-  renderInsightsRow(lastFiltered);
-  renderCharts(lastFiltered);
-  const main = $("cards");
-  if (lastFiltered.length === 0) {
-    main.innerHTML = `<div class="empty">No companies match the current filters. Try widening the CTC range or clearing the search.</div>`;
-    return;
-  }
-  main.innerHTML = lastFiltered.map((r, i) => cardHTML(r, i)).join("");
-}
-
-// ============== View toggle + Modal ==============
-function setViewMode(mode) {
-  viewMode = mode === "grid" ? "grid" : "list";
-  const cards = document.getElementById("cards");
-  cards.classList.toggle("view-grid", viewMode === "grid");
-  cards.classList.toggle("view-list", viewMode === "list");
-  document.getElementById("viewList").classList.toggle("active", viewMode === "list");
-  document.getElementById("viewGrid").classList.toggle("active", viewMode === "grid");
-  render();
-}
-
-function openModal(rowIdx) {
-  const r = lastFiltered[rowIdx];
-  if (!r) return;
-  const subline = [r.designation, r.placeOfPosting].filter(Boolean).join(" · ");
-  const modalBody = document.getElementById("modalBody");
-  modalBody.innerHTML = `
-    <h2>${escapeHtml(r.company)}</h2>
-    ${subline ? `<div class="modal-sub">${escapeHtml(subline)}</div>` : ""}
-    ${detailsHTML(r)}`;
-  document.getElementById("modal").hidden = false;
-}
-function closeModal() { document.getElementById("modal").hidden = true; }
-
-document.getElementById("viewList").addEventListener("click", () => setViewMode("list"));
-document.getElementById("viewGrid").addEventListener("click", () => setViewMode("grid"));
-document.getElementById("modalClose").addEventListener("click", closeModal);
-document.getElementById("modalOverlay").addEventListener("click", closeModal);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeModal();
-});
-
-// ============== Stats + AI Insights ==============
-
-function computeStats(rows) {
-  const total = rows.length;
-  const ctcs = rows.map((r) => r.annualCTC).filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
-  const avg = ctcs.length ? ctcs.reduce((s, v) => s + v, 0) / ctcs.length : null;
-  const median = ctcs.length ? ctcs[Math.floor(ctcs.length / 2)] : null;
-  const topPay = rows.slice().sort((a, b) => (b.annualCTC || 0) - (a.annualCTC || 0))[0] || null;
-
-  const branchTally = {};
-  let totalSelected = 0;
-  let totalApplicants = 0;
-  rows.forEach((r) => {
-    if (r.selectedCount) totalSelected += r.selectedCount;
-    if (r.applicantCount) totalApplicants += r.applicantCount;
-    (r.selectedByBranch || "").split(",").forEach((s) => {
-      const m = s.trim().match(/^(.+):\s*(\d+)$/);
-      if (m) branchTally[m[1].trim()] = (branchTally[m[1].trim()] || 0) + parseInt(m[2]);
+  if (minCbcSlider) {
+    minCbcSlider.addEventListener('input', (e) => {
+      let val = parseFloat(e.target.value);
+      if (val > currentMaxCtc) { val = currentMaxCtc; minCbcSlider.value = val; }
+      currentMinCtc = val;
+      updateSliderUI();
+      applyFiltersAndRender();
     });
+  }
+
+  if (maxCbcSlider) {
+    maxCbcSlider.addEventListener('input', (e) => {
+      let val = parseFloat(e.target.value);
+      if (val < currentMinCtc) { val = currentMinCtc; maxCbcSlider.value = val; }
+      currentMaxCtc = val;
+      updateSliderUI();
+      applyFiltersAndRender();
+    });
+  }
+
+  viewModeGrid.addEventListener('click', () => {
+    viewMode = 'grid';
+    viewModeGrid.className = 'px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all bg-[#27272a] text-white';
+    viewModeList.className = 'px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all text-zinc-500 hover:text-white';
+    renderCards();
   });
-  const topBranches = Object.entries(branchTally).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const mostHires = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))[0] || null;
-  const mostApplicants = rows.slice().sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0))[0] || null;
 
-  return { total, avg, median, topPay, totalSelected, totalApplicants, topBranches, mostHires, mostApplicants };
-}
+  viewModeList.addEventListener('click', () => {
+    viewMode = 'list';
+    viewModeList.className = 'px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all bg-[#27272a] text-white';
+    viewModeGrid.className = 'px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all text-zinc-500 hover:text-white';
+    renderCards();
+  });
 
-// ============== Charts ==============
-const CHART_COLORS = [
-  "#5a1eb4", "#f03c82", "#ffb432", "#1a73e8", "#137333",
-  "#c4365e", "#8a6d00", "#2d8e7f", "#7c52d8", "#e85d04",
-];
-
-function pieSVG(items, size = 160) {
-  const total = items.reduce((s, i) => s + i.value, 0);
-  if (total === 0) return null;
-  const r = size / 2 - 4;
-  const cx = size / 2, cy = size / 2;
-  let angle = -Math.PI / 2;
-  const paths = items.map((it, idx) => {
-    const fraction = it.value / total;
-    if (fraction <= 0) return "";
-    const color = it.color || CHART_COLORS[idx % CHART_COLORS.length];
-    if (fraction >= 0.9999) {
-      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" />`;
+  if ($('themeToggleBtn')) {
+    const htmlEl = document.documentElement;
+    const themeIconDark = $('themeIconDark');
+    const themeIconLight = $('themeIconLight');
+    
+    // Initialize icons based on current theme
+    if (htmlEl.classList.contains('dark')) {
+      themeIconLight.classList.remove('hidden');
+    } else {
+      themeIconDark.classList.remove('hidden');
     }
-    const sweep = fraction * 2 * Math.PI;
-    const x1 = cx + r * Math.cos(angle);
-    const y1 = cy + r * Math.sin(angle);
-    angle += sweep;
-    const x2 = cx + r * Math.cos(angle);
-    const y2 = cy + r * Math.sin(angle);
-    const large = sweep > Math.PI ? 1 : 0;
-    return `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${color}" />`;
-  }).join("");
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}<circle cx="${cx}" cy="${cy}" r="${r * 0.4}" fill="white"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="14" font-weight="800" fill="#5a1eb4">${total}</text></svg>`;
+
+    $('themeToggleBtn').addEventListener('click', () => {
+      htmlEl.classList.toggle('dark');
+      const isDark = htmlEl.classList.contains('dark');
+      if (isDark) {
+        themeIconLight.classList.remove('hidden');
+        themeIconDark.classList.add('hidden');
+      } else {
+        themeIconDark.classList.remove('hidden');
+        themeIconLight.classList.add('hidden');
+      }
+      // Re-render chart to update colors based on theme if necessary
+      // For now the SVG colors are static or handled via CSS
+    });
+  }
+
+  $('modalCloseBtn').addEventListener('click', closeDetailsModal);
+  $('modalOverlay').addEventListener('click', closeDetailsModal);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetailsModal(); });
+  
+  exportCsvBtn.addEventListener('click', triggerCSVDownload);
+  printDossierBtn.addEventListener('click', triggerDossierPrint);
+  btnGenerateInsights.addEventListener('click', generateStructuredReport);
 }
 
-function legendHTML(items) {
-  return `<div class="chart-legend">${items.map((it, idx) => `
-    <div class="li"><span class="sw" style="background:${it.color || CHART_COLORS[idx % CHART_COLORS.length]}"></span><span class="lbl">${escapeHtml(it.label)}</span><span class="v">${it.value}</span></div>
-  `).join("")}</div>`;
+function applyFiltersAndRender() {
+  const term = searchInput.value.toLowerCase().trim();
+  
+  filteredRows = allRows.filter(r => {
+    const matchesSearch = !term || 
+      (r.company && r.company.toLowerCase().includes(term)) || 
+      (r.designation && r.designation.toLowerCase().includes(term)) ||
+      (r.skillSet && r.skillSet.toLowerCase().includes(term)) ||
+      (r.jobDescription && r.jobDescription.toLowerCase().includes(term));
+    
+    // Include 0/unknown CTCs if slider min is 0
+    let matchesCtc = false;
+    if (r.lpa === 0 && currentMinCtc === 0) matchesCtc = true;
+    else if (r.lpa >= currentMinCtc && r.lpa <= currentMaxCtc) matchesCtc = true;
+    if (currentMaxCtc === maxCtcPossible && r.lpa > currentMaxCtc) matchesCtc = true;
+
+    let matchesBranch = true;
+    if (selectedBranches.size > 0) {
+      matchesBranch = r.branchArr.some(b => selectedBranches.has(b));
+    }
+
+    return matchesSearch && matchesCtc && matchesBranch;
+  });
+
+  const sortVal = sortBySelect.value;
+  if (sortVal === 'ctc-desc') filteredRows.sort((a,b) => b.lpa - a.lpa);
+  else if (sortVal === 'ctc-asc') filteredRows.sort((a,b) => a.lpa - b.lpa);
+  else if (sortVal === 'selected-desc') filteredRows.sort((a,b) => (b.selectedCount || 0) - (a.selectedCount || 0));
+  else if (sortVal === 'applicants-desc') filteredRows.sort((a,b) => (b.applicantCount || 0) - (a.applicantCount || 0));
+  else if (sortVal === 'company-asc') filteredRows.sort((a,b) => (a.company || '').localeCompare(b.company || ''));
+
+  updateStats();
+  drawHistogram();
+  drawDonutChart();
+  renderCards();
 }
 
-function barChartSVG(items, w = 360, h = 200) {
+function updateStats() {
+  $('statCompanyCount').textContent = filteredRows.length;
+  $('statCompanyTotalLabel').textContent = `of ${allRows.length} registered notices`;
+
+  const validCtcs = filteredRows.filter(r => r.lpa > 0).map(r => r.lpa).sort((a,b) => a - b);
+  if (validCtcs.length > 0) {
+    const avg = validCtcs.reduce((a,b) => a + b, 0) / validCtcs.length;
+    const median = validCtcs[Math.floor(validCtcs.length / 2)];
+    const highest = filteredRows.slice().sort((a,b) => b.lpa - a.lpa)[0];
+    
+    $('statAvgPackage').textContent = `₹${avg.toFixed(2)} LPA`;
+    $('statMedianPackage').textContent = `Median: ₹${median.toFixed(2)} LPA`;
+    $('statHighestCompany').textContent = highest.company;
+    $('statHighestValue').textContent = `₹${highest.lpa.toFixed(2)} LPA`;
+  } else {
+    $('statAvgPackage').textContent = 'N/A';
+    $('statMedianPackage').textContent = 'Median: N/A';
+    $('statHighestCompany').textContent = 'N/A';
+    $('statHighestValue').textContent = 'N/A';
+  }
+
+  const totalApp = filteredRows.reduce((sum, r) => sum + (r.applicantCount || 0), 0);
+  const totalSel = filteredRows.reduce((sum, r) => sum + (r.selectedCount || 0), 0);
+  $('statTotalApplicants').textContent = totalApp;
+  $('statTotalSelects').textContent = totalSel;
+  $('statConversionRate').textContent = totalApp > 0 ? `${((totalSel / totalApp) * 100).toFixed(1)}% conversion rate` : '0% conversion rate';
+}
+
+function barChartSVG(items, w = 320, h = 160) {
   if (items.length === 0 || items.every((i) => i.value === 0)) return null;
   const max = Math.max(...items.map((i) => i.value)) || 1;
   const padL = 24, padR = 8, padT = 18, padB = 32;
   const chartW = w - padL - padR;
   const chartH = h - padT - padB;
-  const gap = 8;
+  const gap = 16;
   const barW = Math.max(8, (chartW - gap * (items.length - 1)) / items.length);
   const bars = items.map((it, idx) => {
     const x = padL + idx * (barW + gap);
-    const barH = (it.value / max) * chartH;
-    const y = padT + chartH - barH;
+    
+    let rectHtml = '';
+    if (it.value > 0) {
+      // Use a subtle 4px radius on all corners and a 3px gap from the axis
+      const barH = Math.max(8, (it.value / max) * (chartH - 3)); 
+      const y = padT + chartH - barH - 3; // 3px gap from the bottom axis line
+      rectHtml = `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" fill="#506385" rx="4" />`;
+    }
+    
     return `
-      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2, barH).toFixed(1)}" fill="url(#barGrad)" rx="5"/>
-      <text x="${(x + barW / 2).toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" font-size="11" fill="#3a3a44" font-weight="700">${it.value}</text>
-      <text x="${(x + barW / 2).toFixed(1)}" y="${(padT + chartH + 18).toFixed(1)}" text-anchor="middle" font-size="10" fill="#6c6a78">${escapeHtml(it.label)}</text>
+      ${rectHtml}
+      <text x="${(x + barW / 2).toFixed(1)}" y="${(padT + chartH + 20).toFixed(1)}" text-anchor="middle" font-size="8" fill="#a1a1aa" font-weight="400">${escapeHtml(it.label)}</text>
     `;
   }).join("");
-  return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
-    <defs>
-      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#5a1eb4"/>
-        <stop offset="60%" stop-color="#f03c82"/>
-        <stop offset="100%" stop-color="#ffb432"/>
-      </linearGradient>
-    </defs>
-    <line x1="${padL}" y1="${padT + chartH}" x2="${padL + chartW}" y2="${padT + chartH}" stroke="#e8e3f3"/>
+  return `<svg width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
+    <line x1="${padL - 10}" y1="${padT + chartH}" x2="${padL + chartW + 10}" y2="${padT + chartH}" stroke="#27272a" stroke-width="0" stroke-linecap="round"/>
     ${bars}
   </svg>`;
 }
 
-function buildCTCBuckets(rows) {
-  const bs = [
-    { label: "<3L", min: 0, max: 3 },
-    { label: "3-6L", min: 3, max: 6 },
-    { label: "6-10L", min: 6, max: 10 },
-    { label: "10-20L", min: 10, max: 20 },
-    { label: "20-40L", min: 20, max: 40 },
-    { label: "40L+", min: 40, max: Infinity },
-  ];
-  return bs.map((b) => ({
-    label: b.label,
-    value: rows.filter((r) => {
-      const lpa = r.annualCTC ? r.annualCTC / 100000 : null;
-      return lpa != null && lpa >= b.min && lpa < b.max;
-    }).length,
-  }));
-}
+function drawHistogram() {
+  const container = $('histogramContainer');
+  container.innerHTML = '';
+  if (filteredRows.length === 0) return;
 
-function buildBranchPie(rows) {
-  const tally = {};
-  rows.forEach((r) => {
-    (r.selectedByBranch || "").split(",").forEach((s) => {
-      const m = s.trim().match(/^(.+):\s*(\d+)$/);
-      if (!m) return;
-      const key = m[1].trim().slice(0, 18);
-      tally[key] = (tally[key] || 0) + parseInt(m[2]);
-    });
-  });
-  return Object.entries(tally)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 7)
-    .map(([label, value]) => ({ label, value }));
-}
-
-function renderCharts(rows) {
-  const bars = buildCTCBuckets(rows);
-  const pie = buildBranchPie(rows);
-  const barEl = $("ctcBarChart");
-  const pieEl = $("branchPieChart");
-  const barSvg = barChartSVG(bars);
-  barEl.innerHTML = barSvg || `<div class="chart-empty">No CTC data in the current filter</div>`;
-  if (pie.length === 0) {
-    pieEl.innerHTML = `<div class="chart-empty">No selected-candidate data yet. Run a scrape with "Include final-round selected candidates" enabled.</div>`;
-  } else {
-    const svg = pieSVG(pie);
-    pieEl.innerHTML = (svg || "") + legendHTML(pie);
-  }
-}
-
-function renderInsightsRow(rows) {
-  const s = computeStats(rows);
-  const tile = (label, value, extra = "") => `
-    <div class="stat">
-      <div class="label">${label}</div>
-      <div class="value">${value}</div>
-      ${extra ? `<div class="extra">${extra}</div>` : ""}
-    </div>`;
-  const lpa = (v) => v == null ? "—" : `₹${(v / 100000).toFixed(2)} LPA`;
-  const branchesStr = s.topBranches.length
-    ? s.topBranches.map(([b, n]) => `${b.split(/[\s/]/)[0]}: ${n}`).join(" · ")
-    : "—";
-
-  const convRate = (s.totalApplicants > 0 && s.totalSelected > 0)
-    ? ((s.totalSelected / s.totalApplicants) * 100).toFixed(1) + "%"
-    : "";
-
-  $("insightsRow").innerHTML = [
-    tile("Companies", String(s.total)),
-    tile("Avg CTC", lpa(s.avg), s.median != null ? `median ${lpa(s.median)}` : ""),
-    tile("Highest paying", s.topPay ? escapeHtml(s.topPay.company) : "—", s.topPay?.annualCTC != null ? lpa(s.topPay.annualCTC) : ""),
-    tile("Total applicants", String(s.totalApplicants), s.mostApplicants?.applicantCount ? `${escapeHtml(s.mostApplicants.company)} had ${s.mostApplicants.applicantCount}` : ""),
-    tile("Total final selects", String(s.totalSelected), convRate ? `${convRate} conversion` : (s.mostHires?.selectedCount ? `${escapeHtml(s.mostHires.company)} took ${s.mostHires.selectedCount}` : "")),
-    tile("Top branches", branchesStr.length > 40 ? branchesStr.slice(0, 40) + "…" : branchesStr),
-  ].join("");
-}
-
-function buildSummaryForLLM(rows) {
-  const s = computeStats(rows);
-  const lpa = (v) => v == null ? "n/a" : `₹${(v / 100000).toFixed(2)}L`;
-  const topN = rows.slice().sort((a, b) => (b.annualCTC || 0) - (a.annualCTC || 0)).slice(0, 8);
-  const topPayList = topN.map((r) => `- ${r.company} · ${lpa(r.annualCTC)} · ${r.type || ""} · ${r.designation || ""}`).join("\n");
-  const mostList = rows.slice().sort((a, b) => (b.selectedCount || 0) - (a.selectedCount || 0))
-    .filter((r) => r.selectedCount).slice(0, 6)
-    .map((r) => {
-      const conv = r.applicantCount > 0 ? ` (${r.selectedCount}/${r.applicantCount} = ${((r.selectedCount / r.applicantCount) * 100).toFixed(0)}%)` : "";
-      return `- ${r.company} · ${r.selectedCount} selected${conv} · ${r.selectedByBranch || ""}`;
-    }).join("\n");
-  const applicantsList = rows.slice().sort((a, b) => (b.applicantCount || 0) - (a.applicantCount || 0))
-    .filter((r) => r.applicantCount).slice(0, 6)
-    .map((r) => `- ${r.company} · ${r.applicantCount} first-round shortlist · ${r.applicantRoundLabel || ""}`).join("\n");
-
-  return [
-    `Total companies in current view: ${s.total}.`,
-    `Average annual CTC: ${lpa(s.avg)}; median ${lpa(s.median)}.`,
-    `Total first-round shortlist (applicants proxy): ${s.totalApplicants}. Total final selects: ${s.totalSelected}.`,
-    `Top-paying companies:\n${topPayList || "—"}`,
-    `Companies with the most first-round shortlist:\n${applicantsList || "—"}`,
-    `Companies with the most final selects:\n${mostList || "—"}`,
-    `Branch-wise selection counts: ${s.topBranches.map(([b, n]) => `${b} ${n}`).join("; ") || "—"}.`,
-  ].join("\n\n");
-}
-
-async function generateAIInsights() {
-  const btn = $("genInsightsBtn");
-  const out = $("aiContent");
-  const { groqApiKey, groqModel } = await chrome.storage.local.get(["groqApiKey", "groqModel"]);
-  if (!groqApiKey) {
-    out.classList.remove("empty");
-    out.textContent = "No Groq key set. Open the extension popup → Settings → paste a key, then retry.";
+  const validCtcs = filteredRows.map(r => r.lpa).filter(v => v > 0);
+  if (validCtcs.length === 0) {
+    container.innerHTML = `<div class="chart-empty text-zinc-500 text-xs my-auto w-full text-center py-8">No CTC data in the current filter</div>`;
     return;
   }
-  btn.disabled = true;
-  btn.textContent = "Thinking…";
-  out.classList.remove("empty");
-  out.innerHTML = '<span class="ai-loading">Talking to Groq…</span>';
+
+  const buckets = [
+    { label: '<3L', min: 0, max: 3, value: 0 },
+    { label: '3-6L', min: 3, max: 6, value: 0 },
+    { label: '6-10L', min: 6, max: 10, value: 0 },
+    { label: '10-20L', min: 10, max: 20, value: 0 },
+    { label: '20-40L', min: 20, max: 40, value: 0 },
+    { label: '40L+', min: 40, max: Infinity, value: 0 }
+  ];
+
+  validCtcs.forEach(val => {
+    const b = buckets.find(b => val >= b.min && val < b.max);
+    if (b) b.value++;
+  });
+
+  const svg = barChartSVG(buckets);
+  container.innerHTML = svg || `<div class="chart-empty text-zinc-500 text-xs my-auto w-full text-center py-8">No CTC data in the current filter</div>`;
+}
+
+function drawDonutChart() {
+  const svg = $('donutSvg');
+  const legend = $('donutLegend');
+  const centerCount = $('donutCenterCount');
+  
+  svg.innerHTML = '<circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#232328" stroke-width="3"></circle>';
+  legend.innerHTML = '';
+  centerCount.textContent = '0';
+
+  if (filteredRows.length === 0) return;
+
+  const branchCounts = {};
+  let totalHires = 0;
+
+  const shortBranchName = (name) => {
+    const map = {
+      'COMPUTER SCIENCE & ENGINEERING': 'CSE',
+      'INFORMATION TECHNOLOGY': 'CSE',
+      'ELECTRONICS & COMMUNICATION ENGINEERING': 'ECE',
+      'ELECTRICAL & ELECTRONICS ENGINEERING': 'EEE',
+      'MECHANICAL ENGINEERING': 'MECH',
+      'CIVIL ENGINEERING': 'CIVIL',
+      'ARTIFICIAL INTELLIGENCE AND MACHINE LEARNING': 'AIML',
+      'ARTIFICIAL INTELLIGENCE': 'AIML',
+      'AI': 'AIML',
+      'CHEMICAL ENGINEERING': 'CHEM',
+      'PRODUCTION ENGINEERING': 'PROD',
+      'PRODUCTION AND INDUSTRIAL ENGINEERING': 'PROD',
+      'PIE': 'PROD',
+      'BIOTECHNOLOGY': 'BIO',
+      'MATHEMATICS AND COMPUTING': 'MnC',
+      'MATHEMATICS': 'MnC',
+      'MATH': 'MnC',
+      'PHYSICS': 'PHY',
+      'QED': 'QED'
+    };
+    const upper = name.toUpperCase().trim();
+    if (map[upper]) return map[upper];
+    if (upper.split(' ').length > 1) return upper.split(' ').map(w => w[0]).join('');
+    return upper;
+  };
+
+  filteredRows.forEach(r => {
+    if (r.selectedByBranch) {
+      r.selectedByBranch.split(',').forEach(s => {
+        const m = s.trim().match(/^(.+):\s*(\d+)$/);
+        if (m) {
+          const rawBr = m[1].trim();
+          const br = shortBranchName(rawBr);
+          const cnt = parseInt(m[2]);
+          branchCounts[br] = (branchCounts[br] || 0) + cnt;
+          totalHires += cnt;
+        }
+      });
+    }
+  });
+
+  centerCount.textContent = totalHires;
+  if (totalHires === 0) {
+    legend.innerHTML = '<div class="text-xs text-zinc-600 italic">No hiring data</div>';
+    return;
+  }
+
+  const sorted = Object.entries(branchCounts).sort((a,b) => b[1] - a[1]);
+  const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#14b8a6', '#6366f1', '#eab308', '#f43f5e'];
+
+  let cumulativePercent = 0;
+  sorted.slice(0, 8).forEach(([br, cnt], idx) => {
+    const color = colors[idx % colors.length];
+    const percent = (cnt / totalHires) * 100;
+    const offset = 100 - cumulativePercent + 25;
+    const shortBr = shortBranchName(br);
+
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", "18");
+    circle.setAttribute("cy", "18");
+    circle.setAttribute("r", "15.915");
+    circle.setAttribute("fill", "transparent");
+    circle.setAttribute("stroke", color);
+    circle.setAttribute("stroke-width", "3");
+    circle.setAttribute("stroke-dasharray", `${percent} ${100 - percent}`);
+    circle.setAttribute("stroke-dashoffset", offset);
+    svg.appendChild(circle);
+
+    cumulativePercent += percent;
+
+    legend.innerHTML += `
+      <div class="flex items-center justify-between text-[10px]">
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full" style="background-color: ${color}"></span>
+          <span class="text-zinc-400 font-semibold uppercase tracking-wider">${shortBr}</span>
+        </div>
+        <span class="text-white font-mono font-bold">${cnt}</span>
+      </div>
+    `;
+  });
+}
+
+function renderCards() {
+  noticesContainer.innerHTML = '';
+  
+  if (filteredRows.length === 0) {
+    noticesContainer.innerHTML = `<div class="col-span-full py-16 text-center text-zinc-500 text-sm">No notices matched your criteria.</div>`;
+    return;
+  }
+
+  noticesContainer.className = viewMode === 'grid' 
+    ? 'md:col-span-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 transition-all duration-300'
+    : 'md:col-span-4 grid grid-cols-1 gap-3 transition-all duration-300';
+
+  filteredRows.forEach((r, idx) => {
+    const card = document.createElement('div');
+    card.className = viewMode === 'grid'
+      ? 'bg-[#141418] border border-[#1e1e24] hover:border-zinc-700 transition-colors rounded-lg overflow-hidden flex flex-col group cursor-pointer'
+      : 'bg-[#141418] border border-[#1e1e24] hover:border-zinc-700 transition-colors rounded-lg overflow-hidden flex flex-col sm:flex-row sm:items-center group cursor-pointer p-4 gap-4';
+
+    const pay = r.annualCTCDisplay || (r.lpa ? formatLPA(r.lpa) : (r.stipendUG ? `₹${r.stipendUG}/mo` : 'N/A'));
+    const initial = (r.company || 'C').charAt(0).toUpperCase();
+    const typeLabel = r.type ? `<span class="bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded text-[9px] font-semibold tracking-wide uppercase border border-zinc-700">${escapeHtml(r.type)}</span>` : '';
+    const branches = r.branchArr.length > 0 ? `<span class="text-[10px] text-zinc-400 font-medium truncate max-w-[120px]">${r.branchArr.join(', ')}</span>` : '';
+    
+    let statsHtml = '';
+    if (r.applicantCount || r.selectedCount) {
+      statsHtml = `
+        <div class="flex items-center gap-2 mt-3 pt-3 border-t border-zinc-800/60">
+          ${r.applicantCount ? `<div class="text-[10px] text-zinc-500 font-medium"><strong class="text-zinc-300">${r.applicantCount}</strong> applied</div>` : ''}
+          ${r.applicantCount && r.selectedCount ? `<svg class="w-3 h-3 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>` : ''}
+          ${r.selectedCount ? `<div class="text-[10px] text-emerald-500 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded"><strong class="text-emerald-400">${r.selectedCount}</strong> offers</div>` : ''}
+        </div>
+      `;
+    }
+
+    if (viewMode === 'grid') {
+      card.innerHTML = `
+        <div class="p-4 flex-grow flex flex-col">
+          <div class="flex items-start justify-between mb-3 gap-2">
+            <div class="w-10 h-10 rounded bg-[#1c1c24] border border-[#2d2d39] flex items-center justify-center flex-shrink-0 text-white font-bold font-space">${initial}</div>
+            <div class="flex flex-col items-end gap-1 text-right">
+              ${typeLabel}
+              ${branches}
+            </div>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white leading-tight font-space">${escapeHtml(r.company)}</h3>
+            <p class="text-xs text-zinc-400 mt-1 line-clamp-1 font-mono">${escapeHtml(r.designation || 'Open Role')}</p>
+          </div>
+          <div class="mt-4 mb-2">
+            <span class="text-xl font-extrabold text-white font-mono tracking-tight">${escapeHtml(pay)}</span>
+          </div>
+          ${statsHtml}
+        </div>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="w-10 h-10 rounded bg-[#1c1c24] border border-[#2d2d39] flex items-center justify-center flex-shrink-0 text-white font-bold font-space sm:self-start">${initial}</div>
+        <div class="flex-grow min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <h3 class="text-base font-bold text-white leading-tight font-space truncate">${escapeHtml(r.company)}</h3>
+            ${typeLabel}
+          </div>
+          <p class="text-xs text-zinc-400 truncate font-mono">${escapeHtml(r.designation || 'Open Role')} <span class="mx-1 opacity-50">•</span> ${branches}</p>
+        </div>
+        <div class="flex-shrink-0 text-right min-w-[120px]">
+          <span class="text-lg font-extrabold text-white font-mono block">${escapeHtml(pay)}</span>
+        </div>
+        <div class="flex-shrink-0 min-w-[140px] flex justify-end">
+          ${r.selectedCount ? `<div class="text-[10px] text-emerald-500 font-bold bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">${r.selectedCount} offers extended</div>` : (r.applicantCount ? `<div class="text-[10px] text-zinc-400 bg-zinc-800 px-2 py-1 rounded">${r.applicantCount} applicants</div>` : '')}
+        </div>
+      `;
+    }
+
+    card.addEventListener('click', () => openDetailsModal(r));
+    noticesContainer.appendChild(card);
+  });
+}
+
+function openDetailsModal(r) {
+  $('modalType').textContent = r.type || 'NOTICE';
+  $('modalCompany').textContent = r.company;
+  $('modalDesignation').textContent = r.designation || 'Open Role';
+  
+  $('modalCTC').textContent = r.annualCTCDisplay || (r.lpa ? formatLPA(r.lpa) : 'N/A');
+  $('modalBasePay').textContent = `Base Pay: ${r.basePay || 'N/A'}`;
+  $('modalBonus').textContent = `Bonus / Variable: ${r.bonus || 'N/A'}`;
+  $('modalStipend').textContent = `Stipend (UG/PG): ${r.stipendUG ? '₹'+r.stipendUG+'/mo' : 'N/A'}`;
+  
+  $('modalCourses').textContent = `Courses: ${r.courses || 'N/A'}`;
+  $('modalMinCGPA').textContent = `Required CGPA Circuital/Non: ${r.cgpaCirc || 'N/A'} / ${r.cgpaNonCirc || 'N/A'}`;
+  $('modalCritUG').textContent = `UG criteria: ${r.criteriaUG || 'N/A'}`;
+  
+  $('modalApplicantsCount').textContent = r.applicantCount || '0';
+  $('modalApplicantsByBranch').textContent = r.applicantByBranch || '—';
+  $('modalSelectedCount').textContent = r.selectedCount || '0';
+  $('modalSelectedByBranch').textContent = r.selectedByBranch || '—';
+  
+  $('modalJobDescription').textContent = r.jobDescription || r.jdSummary || 'No detailed description available.';
+  
+  const winnerList = $('modalWinnerNameList');
+  winnerList.innerHTML = '';
+  if (r.selectedList) {
+    $('modalWinnerBlock').classList.remove('hidden');
+    r.selectedList.split(';').forEach(name => {
+      if (!name.trim()) return;
+      winnerList.innerHTML += `<div class="bg-[#1c1c24] border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-300 font-mono truncate">${escapeHtml(name.trim())}</div>`;
+    });
+  } else {
+    $('modalWinnerBlock').classList.add('hidden');
+  }
+
+  $('modalPostDate').textContent = `Posted on: ${r.postedOn || 'N/A'}`;
+  $('modalDeadline').textContent = `Deadline: ${r.deadline || 'N/A'}`;
+  $('modalWebUrl').href = r.companyURL ? (r.companyURL.startsWith('http') ? r.companyURL : 'https://'+r.companyURL) : '#';
+  $('modalApplyUrl').href = r.viewApplyUrl || '#';
+
+  $('detailsModal').classList.remove('hidden');
+}
+
+function closeDetailsModal() {
+  $('detailsModal').classList.add('hidden');
+}
+
+// AI Integration
+async function generateStructuredReport() {
+  btnGenerateInsights.disabled = true;
+  aiBtnText.textContent = "Analyzing placement subset data...";
+  aiReportWrap.classList.remove('hidden');
+  aiReportBox.innerHTML = '<span class="animate-pulse text-zinc-400">Communicating with Groq models...</span>';
 
   try {
-    const summary = buildSummaryForLLM(lastFiltered);
+    const { groqApiKey, groqModel } = await chrome.storage.local.get(["groqApiKey", "groqModel"]);
+    if (!groqApiKey) {
+      aiReportBox.innerHTML = '<span class="text-red-400">Groq API Key is missing. Please configure it in the extension popup settings.</span>';
+      return;
+    }
+
+    const filteredCount = filteredRows.length;
+    const placedCount = filteredRows.reduce((a, b) => a + (b.selectedCount || 0), 0);
+    const validCtcs = filteredRows.filter(r => r.lpa > 0).map(r => r.lpa);
+    const avgCTC = validCtcs.length > 0 ? (validCtcs.reduce((a, b) => a + b, 0) / validCtcs.length * 100000) : 0;
+    const highest = filteredRows.slice().sort((a,b) => b.lpa - a.lpa)[0];
+
+    const promptData = [
+      `Total companies: ${filteredCount}`,
+      `Total Placed: ${placedCount}`,
+      `Avg CTC: ₹${(avgCTC/100000).toFixed(2)} LPA`,
+      `Highest: ${highest ? highest.company + ' (₹' + highest.lpa.toFixed(2) + ' LPA)' : 'N/A'}`,
+      `Top 5 hiring companies: ${filteredRows.slice().sort((a,b) => (b.selectedCount||0)-(a.selectedCount||0)).slice(0,5).map(r => r.company + ' (' + r.selectedCount + ')').join(', ')}`
+    ].join("\\n");
+
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + groqApiKey },
@@ -668,247 +630,56 @@ async function generateAIInsights() {
         model: groqModel || "llama-3.1-8b-instant",
         temperature: 0.3,
         messages: [
-          {
-            role: "system",
-            content: "You are a placement analyst for BIT Mesra students. Given a dataset summary, write a tight 4-6 bullet analysis: standouts in compensation, hiring leaders, branch-wise observations, and one actionable suggestion for a student exploring this list. Use Indian rupee notation (LPA / Lakh). Plain text, no markdown headers, just bullets starting with '•'.",
-          },
-          { role: "user", content: summary },
-        ],
-      }),
+          { role: "system", content: "You are a placement analyst. Given the placement data subset, write a tight 4 bullet analysis of standouts, outliers, and hiring trends. Use Indian Rupee notation (LPA). Format as raw HTML lists only (e.g. <ul><li>...</li></ul>)." },
+          { role: "user", content: promptData }
+        ]
+      })
     });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
-    }
+
+    if (!res.ok) throw new Error("API responded with " + res.status);
     const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content || "(empty response)";
-    out.textContent = text;
+    const insightsHtml = data?.choices?.[0]?.message?.content || "No insights generated.";
+    
+    aiReportBox.innerHTML = `
+      <p class="text-sm text-zinc-300 mb-4">
+        Placement notice extraction indicates current competitive trends. The selected subset covers <strong>${filteredCount} active recruiters</strong> with an average annual compensation of <strong>₹${(avgCTC / 100000).toFixed(2)} LPA</strong>, extending <strong>${placedCount} placement selects</strong>.
+      </p>
+      <div class="text-zinc-300 bg-zinc-900/60 p-4 rounded-lg border border-zinc-800">
+        ${insightsHtml}
+      </div>
+    `;
   } catch (e) {
-    out.textContent = "Error: " + e.message;
+    aiReportBox.innerHTML = `<span class="text-red-400">Error generating insights: ${e.message}</span>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Regenerate";
+    btnGenerateInsights.disabled = false;
+    aiBtnText.textContent = "Refresh Intelligence Report";
   }
 }
 
-document.getElementById("genInsightsBtn").addEventListener("click", generateAIInsights);
-
-// ============== Export — CSV / XLSX / PDF ==============
-
-const EXPORT_COLUMNS = [
-  ["Company", "company"],
-  ["Type", "type"],
-  ["Designation", "designation"],
-  ["AI Summary", "jdSummary"],
-  ["Job Description", "jobDescription"],
-  ["Place of Posting", "placeOfPosting"],
-  ["Eligible Courses (all)", "courses"],
-  ["Matching Branches", "matchingCourses"],
-  ["CGPA Circuital", "cgpaCirc"],
-  ["CGPA Non-Circuital", "cgpaNonCirc"],
-  ["Required SkillSet", "skillSet"],
-  ["UG Criteria", "criteriaUG"],
-  ["PG Criteria", "criteriaPG"],
-  ["Stipend UG (₹/mo)", "stipendUG"],
-  ["Stipend PG (₹/mo)", "stipendPG"],
-  ["Base Pay", "basePay"],
-  ["Base Pay UG", "ugBasePay"],
-  ["Base Pay PG", "pgBasePay"],
-  ["CTC", "ctc"],
-  ["CTC UG", "ugCTC"],
-  ["CTC PG", "pgCTC"],
-  ["Bonus / Variable", "bonus"],
-  ["Annual CTC (₹)", "annualCTC"],
-  ["Annual CTC (display)", "annualCTCDisplay"],
-  ["CTC Source", "compSource"],
-  ["Applicants (first-round count)", "applicantCount"],
-  ["Applicants (by branch)", "applicantByBranch"],
-  ["First-round label", "applicantRoundLabel"],
-  ["Final Selected (count)", "selectedCount"],
-  ["Final Selected (by branch)", "selectedByBranch"],
-  ["Final Selected (names)", "selectedList"],
-  ["Deadline", "deadline"],
-  ["Posted On", "postedOn"],
-  ["Company URL", "companyURL"],
-  ["Detail Page", "viewApplyUrl"],
-  ["Updates Page", "updatesUrl"],
-];
-
+// Exports
 function csvEscape(s) {
   if (s == null) return "";
-  const str = String(s).replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-  return /[",]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-}
-function toCSV(rows) {
-  const lines = [EXPORT_COLUMNS.map(([h]) => csvEscape(h)).join(",")];
-  for (const r of rows) lines.push(EXPORT_COLUMNS.map(([, k]) => csvEscape(r[k] ?? "")).join(","));
-  return lines.join("\n");
+  const str = String(s).replace(/\\r?\\n/g, " ").replace(/\\s+/g, " ").trim();
+  return /[",]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
 }
 
-function xmlEscape(s) {
-  return String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
-}
-function colLetter(idx) {
-  let s = "", n = idx;
-  while (true) { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; if (n < 0) break; }
-  return s;
-}
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) {
-    crc = crc ^ bytes[i];
-    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-function makeZip(files) {
-  const enc = new TextEncoder();
-  const parts = []; const central = []; let offset = 0;
-  for (const { name, content } of files) {
-    const nameBytes = enc.encode(name);
-    const crc = crc32(content); const size = content.length;
-    const lh = new Uint8Array(30 + nameBytes.length);
-    const lhDV = new DataView(lh.buffer);
-    lhDV.setUint32(0, 0x04034b50, true); lhDV.setUint16(4, 20, true);
-    lhDV.setUint16(6, 0, true); lhDV.setUint16(8, 0, true);
-    lhDV.setUint16(10, 0, true); lhDV.setUint16(12, 0, true);
-    lhDV.setUint32(14, crc, true); lhDV.setUint32(18, size, true);
-    lhDV.setUint32(22, size, true); lhDV.setUint16(26, nameBytes.length, true);
-    lhDV.setUint16(28, 0, true); lh.set(nameBytes, 30);
-    parts.push(lh, content);
-    const cd = new Uint8Array(46 + nameBytes.length);
-    const cdDV = new DataView(cd.buffer);
-    cdDV.setUint32(0, 0x02014b50, true); cdDV.setUint16(4, 20, true);
-    cdDV.setUint16(6, 20, true); cdDV.setUint16(8, 0, true);
-    cdDV.setUint16(10, 0, true); cdDV.setUint16(12, 0, true);
-    cdDV.setUint16(14, 0, true); cdDV.setUint32(16, crc, true);
-    cdDV.setUint32(20, size, true); cdDV.setUint32(24, size, true);
-    cdDV.setUint16(28, nameBytes.length, true); cdDV.setUint16(30, 0, true);
-    cdDV.setUint16(32, 0, true); cdDV.setUint16(34, 0, true);
-    cdDV.setUint16(36, 0, true); cdDV.setUint32(38, 0, true);
-    cdDV.setUint32(42, offset, true); cd.set(nameBytes, 46);
-    central.push(cd);
-    offset += lh.length + content.length;
-  }
-  const centralSize = central.reduce((s, c) => s + c.length, 0);
-  const eocd = new Uint8Array(22);
-  const eocdDV = new DataView(eocd.buffer);
-  eocdDV.setUint32(0, 0x06054b50, true);
-  eocdDV.setUint16(8, files.length, true); eocdDV.setUint16(10, files.length, true);
-  eocdDV.setUint32(12, centralSize, true); eocdDV.setUint32(16, offset, true);
-  const all = [...parts, ...central, eocd];
-  const total = all.reduce((s, p) => s + p.length, 0);
-  const out = new Uint8Array(total); let p = 0;
-  for (const part of all) { out.set(part, p); p += part.length; }
-  return out;
-}
-function toXLSX(rows) {
-  const headers = EXPORT_COLUMNS.map(([h]) => h);
-  const sst = []; const idx = new Map();
-  const s = (v) => { const str = String(v ?? ""); if (!idx.has(str)) { idx.set(str, sst.length); sst.push(str); } return idx.get(str); };
-  const xmlRows = [];
-  xmlRows.push(`<row r="1">${headers.map((h, i) => `<c r="${colLetter(i)}1" t="s"><v>${s(h)}</v></c>`).join("")}</row>`);
-  rows.forEach((row, ri) => {
-    const r = ri + 2;
-    const cells = EXPORT_COLUMNS.map(([, k], i) => {
-      const v = row[k];
-      if (v === "" || v == null) return "";
-      return `<c r="${colLetter(i)}${r}" t="s"><v>${s(v)}</v></c>`;
-    }).join("");
-    xmlRows.push(`<row r="${r}">${cells}</row>`);
+function triggerCSVDownload() {
+  const cols = ["Company", "Type", "Designation", "CTC", "Applicants", "Selected", "Deadline"];
+  const lines = [cols.join(",")];
+  filteredRows.forEach(r => {
+    lines.push([
+      csvEscape(r.company), csvEscape(r.type), csvEscape(r.designation), 
+      csvEscape(r.annualCTCDisplay || r.lpa), csvEscape(r.applicantCount), 
+      csvEscape(r.selectedCount), csvEscape(r.deadline)
+    ].join(","));
   });
-  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${xmlRows.join("")}</sheetData></worksheet>`;
-  const sstXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sst.length}" uniqueCount="${sst.length}">${sst.map((v) => `<si><t xml:space="preserve">${xmlEscape(v)}</t></si>`).join("")}</sst>`;
-  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="JUST TNP" sheetId="1" r:id="rId1"/></sheets></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`;
-  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>`;
-  const enc = new TextEncoder();
-  return makeZip([
-    { name: "[Content_Types].xml", content: enc.encode(contentTypes) },
-    { name: "_rels/.rels", content: enc.encode(rootRels) },
-    { name: "xl/workbook.xml", content: enc.encode(workbookXml) },
-    { name: "xl/_rels/workbook.xml.rels", content: enc.encode(workbookRels) },
-    { name: "xl/worksheets/sheet1.xml", content: enc.encode(sheetXml) },
-    { name: "xl/sharedStrings.xml", content: enc.encode(sstXml) },
-  ]);
-}
-
-// Plain-text CGPA cell for the PDF — mirrors viewer.cgpaCardDisplay logic
-// but text-only. v2.5.0 changed criteriaUG to include "UG line · Other Criteria"
-// which made dumping raw text blow up the PDF column width.
-function cgpaPdfDisplay(r) {
-  const raw = r.criteriaUG || "";
-  if ((raw.match(/\bCGPA\b/gi) || []).length >= 2) {
-    return raw.length > 90 ? raw.slice(0, 87) + "…" : raw;
-  }
-  const circ = formatCGPA(r.cgpaCirc);
-  const nonCirc = formatCGPA(r.cgpaNonCirc);
-  if (circ && nonCirc) return `Circ ${circ} / Non-circ ${nonCirc}`;
-  if (circ) return `Circ ${circ}`;
-  if (nonCirc) return `Non-circ ${nonCirc}`;
-  if (raw) return raw.length > 60 ? raw.slice(0, 57) + "…" : raw;
-  return "—";
-}
-
-// Compact PDF — only the essentials per user request:
-// Company · Type · CGPA · Monthly Stipend · Annual CTC · Applicants · Selected
-const PDF_COLS = [
-  ["Company", (r) => r.company],
-  ["Type", (r) => r.type || "—"],
-  ["CGPA", cgpaPdfDisplay],
-  ["Monthly", (r) => r.stipendUG ? `₹${r.stipendUG}/mo` : "—"],
-  ["Annual CTC", (r) => r.annualCTCDisplay || (r.ctc || r.basePay || "—")],
-  ["Applicants", (r) => r.applicantCount ? String(r.applicantCount) : "—"],
-  ["Selected", (r) => r.selectedCount ? `${r.selectedCount} (${r.selectedByBranch || ""})` : "—"],
-];
-
-function toPrintHTML(rows) {
-  const head = PDF_COLS.map(([h]) => `<th>${escapeHtml(h)}</th>`).join("");
-  const body = rows.map((r) => `<tr>${PDF_COLS.map(([, fn]) => `<td>${escapeHtml(fn(r) ?? "")}</td>`).join("")}</tr>`).join("");
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>JUST TNP — Placement Report</title>
-<style>
-  @page { size: A4 landscape; margin: 10mm; }
-  body { font-family: -apple-system, sans-serif; font-size: 9.5px; margin: 0; padding: 12px; color: #222; }
-  h1 { font-size: 17px; margin: 0 0 2px; background: linear-gradient(90deg,#5a1eb4,#f03c82,#ffb432); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; }
-  .meta { font-size: 10px; color: #555; margin-bottom: 10px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; text-align: left; }
-  th { background: #5a1eb4; color: white; font-weight: 600; font-size: 10px; }
-  tr:nth-child(even) td { background: #faf7ff; }
-  .footer { margin-top: 14px; font-size: 9px; color: #888; }
-</style></head>
-<body>
-<h1>JUST TNP — Placement Report</h1>
-<div class="meta">Generated ${new Date().toLocaleString()} · ${rows.length} companies · Sorted ascending by annual CTC</div>
-<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
-<div class="footer">Use Cmd/Ctrl+P → Save as PDF if the print dialog did not open automatically.</div>
-<script>window.addEventListener("load", () => setTimeout(() => window.print(), 400));<\/script>
-</body></html>`;
-}
-
-function triggerDownload(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
+  const blob = new Blob([lines.join("\\n")], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `Placement_Export_${new Date().getTime()}.csv`;
   a.click();
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
 }
 
-document.getElementById("dlCSV").addEventListener("click", () => {
-  const blob = new Blob([toCSV(lastFiltered)], { type: "text/csv" });
-  triggerDownload(blob, `just-tnp-${Date.now()}.csv`);
-});
-document.getElementById("dlXLSX").addEventListener("click", () => {
-  const bytes = toXLSX(lastFiltered);
-  const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  triggerDownload(blob, `just-tnp-${Date.now()}.xlsx`);
-});
-document.getElementById("dlPDF").addEventListener("click", () => {
-  const html = toPrintHTML(lastFiltered);
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
-});
+function triggerDossierPrint() {
+  window.print();
+}

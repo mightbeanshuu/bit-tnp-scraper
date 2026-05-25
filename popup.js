@@ -135,10 +135,11 @@ try {
 
   const { lastScrape } = await chrome.storage.local.get("lastScrape");
   const btn = document.getElementById("viewerBtn");
+  const btnText = document.getElementById("viewerBtnText");
   if (lastScrape?.rows?.length) {
-    btn.textContent = `📊 Open Viewer (${lastScrape.rows.length}) ↗`;
+    if (btnText) btnText.textContent = `Open Viewer (${lastScrape.rows.length})`;
   } else {
-    btn.textContent = "📊 Open Viewer (no data yet)";
+    if (btnText) btnText.textContent = "Open Viewer (no data)";
     btn.disabled = true;
   }
 })();
@@ -218,10 +219,11 @@ scrapeBtn.addEventListener("click", async () => {
       },
     });
 
-    log(`✓ ${rows.length} companies saved. Click "Open Viewer ↗" to explore + download.`);
+    log(`✓ ${rows.length} companies saved. Click "Open Viewer" to explore + download.`);
     const btn = document.getElementById("viewerBtn");
+    const btnText = document.getElementById("viewerBtnText");
     btn.disabled = false;
-    btn.textContent = `📊 Open Viewer (${rows.length}) ↗`;
+    if (btnText) btnText.textContent = `Open Viewer (${rows.length})`;
   } catch (e) {
     log("ERROR: " + e.message);
     console.error(e);
