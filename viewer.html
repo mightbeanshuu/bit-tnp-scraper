@@ -1,496 +1,425 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="dark">
 <head>
-  <meta charset="utf-8" />
-  <title>JUST TNP Viewer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TnP Scrapper</title>
+  
+  <!-- Google Fonts imports -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tailwind.css">
+
   <style>
-    :root {
-      --grad: linear-gradient(135deg, #5a1eb4 0%, #f03c82 55%, #ffb432 100%);
-      --grad-text: linear-gradient(90deg, #5a1eb4, #f03c82, #ffb432);
-      --bg: #faf9fc;
-      --card: #ffffff;
-      --border: #ece9f3;
-      --text: #1a1a23;
-      --muted: #6c6a78;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-    header {
-      padding: 22px 28px 16px;
-      background: var(--card);
-      border-bottom: 1px solid var(--border);
-      position: sticky; top: 0; z-index: 10;
-      box-shadow: 0 1px 0 rgba(0,0,0,0.02);
-    }
-    h1 {
-      margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;
-      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      display: inline-block;
-    }
-    .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-
-    .controls {
-      display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; align-items: center;
-    }
-    .search-wrap {
-      position: relative; flex: 1; min-width: 280px;
-    }
-    .search-wrap::before {
-      content: "🔍"; position: absolute; left: 12px; top: 50%;
-      transform: translateY(-50%); font-size: 14px; opacity: 0.6; pointer-events: none;
-    }
-    .controls input[type=text] {
-      width: 100%; padding: 11px 14px 11px 36px; font-size: 14px; font-weight: 500;
-      border: 1.5px solid var(--border); border-radius: 10px;
-      background: var(--card); outline: none; transition: border-color 0.15s, box-shadow 0.15s;
-    }
-    .controls input[type=text]:focus {
-      border-color: #5a1eb4; box-shadow: 0 0 0 3px rgba(90,30,180,0.12);
-    }
-    .controls select {
-      padding: 10px 12px; font-size: 13px; border: 1px solid var(--border);
-      border-radius: 8px; background: var(--card); outline: none;
-    }
-    .controls select:focus { border-color: #5a1eb4; }
-    .pill {
-      background: var(--grad); color: white; padding: 4px 10px;
-      border-radius: 999px; font-size: 11px; font-weight: 600;
-    }
-    button.dl {
-      padding: 8px 12px; font-size: 12px; border: 1px solid var(--border);
-      background: white; color: #5a1eb4; border-radius: 8px; font-weight: 700;
-      cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.08s;
-    }
-
-    .view-toggle {
-      display: inline-flex; background: #f1eef8; border-radius: 8px; padding: 2px;
-      border: 1px solid var(--border);
-    }
-    .view-btn {
-      padding: 6px 12px; font-size: 12px; border: none; background: transparent;
-      color: var(--muted); font-weight: 700; cursor: pointer; border-radius: 6px;
-      transition: background 0.15s, color 0.15s;
-    }
-    .view-btn:hover { color: #5a1eb4; }
-    .view-btn.active {
-      background: white; color: #5a1eb4;
-      box-shadow: 0 1px 3px rgba(90,30,180,0.15);
-    }
-    button.dl:hover { background: #faf6ff; border-color: #5a1eb4; }
-    button.dl:active { transform: scale(0.97); }
-    button.dl.primary {
-      background: var(--grad); color: white; border-color: transparent;
-      box-shadow: 0 2px 8px rgba(90,30,180,0.25);
-    }
-
-    .slider-wrap {
-      margin-top: 14px;
-      padding: 14px 16px;
-      background: linear-gradient(135deg, rgba(90,30,180,0.04), rgba(240,60,130,0.04));
-      border: 1px solid var(--border);
-      border-radius: 10px;
-    }
-    .slider-label {
-      display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 8px;
-    }
-    .slider-label .value { font-weight: 700; color: var(--text); font-size: 13px; }
-
-    .dual {
-      position: relative; height: 30px;
-    }
-    .dual .track {
-      position: absolute; top: 13px; left: 0; right: 0; height: 4px;
-      background: #ece9f3; border-radius: 2px;
-    }
-    .dual .active {
-      position: absolute; top: 13px; height: 4px;
-      background: var(--grad); border-radius: 2px;
-    }
-    .dual input[type=range] {
-      -webkit-appearance: none; appearance: none;
-      position: absolute; width: 100%; height: 30px;
-      background: transparent; pointer-events: none; margin: 0;
-    }
-    .dual input[type=range]::-webkit-slider-thumb {
-      -webkit-appearance: none; appearance: none; pointer-events: all;
-      width: 22px; height: 22px; border-radius: 50%;
-      background: var(--grad); border: 3px solid white;
-      box-shadow: 0 2px 8px rgba(90,30,180,0.4);
-      cursor: grab;
-    }
-    .dual input[type=range]::-webkit-slider-thumb:active { cursor: grabbing; }
-    .dual input[type=range]::-moz-range-thumb {
-      pointer-events: all; width: 22px; height: 22px; border-radius: 50%;
-      background: #5a1eb4; border: 3px solid white;
-      box-shadow: 0 2px 8px rgba(90,30,180,0.4); cursor: grab;
-    }
-
-    main { padding: 20px 28px 80px; max-width: 1200px; margin: 0 auto; }
-
-    .empty { text-align: center; padding: 80px 20px; color: var(--muted); }
-
-    .card {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 14px; padding: 16px 18px; margin-bottom: 12px;
-      cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
-      position: relative;
-    }
-    .card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(90,30,180,0.08); border-color: #d8d3e6; }
-    .card.expanded { border-color: #5a1eb4; box-shadow: 0 6px 20px rgba(90,30,180,0.12); }
-
-    .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
-    .card-head .name { font-size: 16px; font-weight: 700; }
-    .card-head .pay {
-      font-size: 16px; font-weight: 800;
-      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      white-space: nowrap;
-    }
-    .card-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
-
-    .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-    .badge {
-      font-size: 11px; padding: 3px 9px; border-radius: 999px;
-      background: #f1eef8; color: #5a1eb4; font-weight: 600;
-    }
-    .badge.type { background: #fff1f5; color: #c4365e; }
-    .badge.selected { background: #e6f4ea; color: #137333; }
-    .badge.cgpa { background: #fef7e0; color: #8a6d00; }
-
-    .summary { margin-top: 10px; font-size: 13px; color: #38383f; line-height: 1.5; }
-
-    .details {
-      margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border);
-      display: none;
-    }
-    .card.expanded .details { display: block; }
-    .details h4 {
-      margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
-      color: var(--muted); font-weight: 700;
-    }
-    .details .body { font-size: 13px; line-height: 1.55; color: #2a2a32; white-space: pre-wrap; }
-    .details a { color: #5a1eb4; text-decoration: none; font-weight: 600; }
-    .details a:hover { text-decoration: underline; }
-    .selected-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 4px 12px; font-size: 12px; color: #2a2a32;
-    }
-
-    .branch-tally {
-      display: flex; gap: 6px; flex-wrap: wrap;
-    }
-    .branch-tally .b {
-      background: #f1eef8; padding: 4px 10px; border-radius: 6px;
-      font-size: 11px; font-weight: 600; color: #5a1eb4;
-    }
-    .branch-tally.sel .b {
-      background: rgba(19,115,51,0.10); color: #137333;
-    }
-
-    /* Selection funnel: clear visual split between Applicants vs Selected. */
-    .funnel {
-      background: linear-gradient(135deg, rgba(90,30,180,0.04), rgba(19,115,51,0.05));
-      border: 1px solid var(--border); border-radius: 14px;
-      padding: 18px 20px; margin: 6px 0 4px;
-    }
-    .funnel-head {
-      font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
-      text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
-    }
-    .funnel-grid {
-      display: grid; grid-template-columns: 1fr auto 1fr;
-      gap: 14px; align-items: stretch;
-    }
-    .funnel-stat {
-      background: white; border: 1px solid var(--border);
-      border-radius: 12px; padding: 14px 16px; text-align: center;
-    }
-    .funnel-stat .label {
-      font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px;
-      text-transform: uppercase; color: var(--muted);
-    }
-    .funnel-stat .value {
-      font-size: 30px; font-weight: 800; margin-top: 4px; line-height: 1;
-    }
-    .funnel-stat.applicants .value { color: #5a1eb4; }
-    .funnel-stat.selected .value { color: #137333; }
-    .funnel-stat .extra { font-size: 11px; color: var(--muted); margin-top: 6px; }
-    .funnel-arrow {
-      display: flex; align-items: center; justify-content: center;
-      font-size: 22px; font-weight: 700; color: #c4365e;
-    }
-    .funnel-branches {
-      display: grid; grid-template-columns: 1fr 1fr;
-      gap: 12px; margin-top: 14px;
-    }
-    .funnel-branches .col h5 {
-      margin: 0 0 8px; font-size: 10.5px; font-weight: 700;
-      letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted);
-    }
-    .funnel-list { margin-top: 14px; }
-    .funnel-list h5 {
-      margin: 0 0 8px; font-size: 10.5px; font-weight: 700;
-      letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted);
-    }
-    .funnel-empty { color: var(--muted); font-style: italic; font-size: 12px; }
-    @media (max-width: 640px) {
-      .funnel-grid { grid-template-columns: 1fr; }
-      .funnel-arrow { transform: rotate(90deg); padding: 4px 0; }
-      .funnel-branches { grid-template-columns: 1fr; }
-    }
-
-    /* Compact funnel row in the collapsed card. */
-    .funnel-mini {
-      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-      font-size: 12.5px;
-    }
-    .funnel-mini .stat-pill {
-      display: inline-flex; align-items: baseline; gap: 5px;
-      padding: 2px 10px; border-radius: 999px; font-weight: 600;
-    }
-    .funnel-mini .stat-pill.app {
-      background: rgba(90,30,180,0.08); color: #5a1eb4;
-    }
-    .funnel-mini .stat-pill.sel {
-      background: rgba(19,115,51,0.10); color: #137333;
-    }
-    .funnel-mini .stat-pill strong { font-size: 14px; font-weight: 800; }
-    .funnel-mini .arrow { color: #c4365e; font-weight: 700; }
-    .funnel-mini .conv { color: var(--muted); font-size: 11px; }
-
-    .toggle-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
-
-    /* Insights panel */
-    .insights {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 10px; margin: 14px 0 0;
-    }
-    .stat {
-      background: linear-gradient(135deg, rgba(90,30,180,0.06), rgba(240,60,130,0.04));
-      border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
-    }
-    .stat .label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); }
-    .stat .value {
-      font-size: 20px; font-weight: 800; margin-top: 4px; line-height: 1.1;
-      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .stat .extra { font-size: 11px; color: var(--muted); margin-top: 3px; }
-
-    .ai-panel {
-      margin: 14px 0 0; padding: 18px 20px;
-      background: linear-gradient(135deg, rgba(90,30,180,0.05), rgba(255,180,50,0.04));
-      border: 1px solid #ddd2f2; border-radius: 14px; position: relative;
-    }
-    .ai-panel-head { display: flex; justify-content: space-between; align-items: center; }
-    .ai-panel-head h3 {
-      margin: 0; font-size: 14px; font-weight: 800;
-      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .ai-btn {
-      padding: 8px 14px; border: none; border-radius: 8px;
-      background: var(--grad); color: white; font-weight: 700; font-size: 12px;
-      cursor: pointer; box-shadow: 0 2px 8px rgba(90,30,180,0.25);
-      transition: transform 0.08s, box-shadow 0.15s;
-    }
-    .ai-btn:hover { box-shadow: 0 3px 14px rgba(90,30,180,0.4); }
-    .ai-btn:active { transform: scale(0.97); }
-    .ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .ai-content {
-      margin-top: 12px; font-size: 13px; line-height: 1.6; color: #2a2a32;
-      white-space: pre-wrap;
-    }
-    .ai-content.empty { color: var(--muted); font-style: italic; }
-    .ai-loading { display: inline-block; animation: pulse 1.2s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-
-    /* Charts */
-    .charts {
-      display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px;
-      margin-top: 14px;
-    }
-    .chart-card {
-      background: white; border: 1px solid var(--border);
-      border-radius: 14px; padding: 14px 18px;
-    }
-    .chart-title {
-      font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
-      text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
-    }
-    .chart-body { display: flex; align-items: center; gap: 14px; }
-    .chart-body svg { display: block; max-width: 100%; height: auto; }
-    .chart-empty { text-align: center; color: var(--muted); font-style: italic; padding: 30px; font-size: 12px; }
-    .chart-legend { display: flex; gap: 10px 14px; flex-wrap: wrap; font-size: 11px; flex: 1; }
-    .chart-legend .li { display: flex; align-items: center; gap: 6px; }
-    .chart-legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-    .chart-legend .lbl { color: #38383f; }
-    .chart-legend .v { color: var(--muted); font-weight: 700; }
-
-    /* Grid view (square tiles) */
-    .cards.view-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-      gap: 14px; padding-bottom: 10px;
-    }
-    .cards.view-grid .card {
-      margin-bottom: 0; padding: 16px 18px;
-      min-height: 220px; display: flex; flex-direction: column;
-    }
-    .cards.view-grid .card .card-sub,
-    .cards.view-grid .card .summary,
-    .cards.view-grid .card .toggle-hint,
-    .cards.view-grid .card .badges,
-    .cards.view-grid .card .info-rows .info-row:not([data-key="branches"]) { display: none; }
-    .cards.view-grid .card .details { display: none !important; }
-    .cards.view-grid .card.expanded { /* no inline expansion in grid mode */ }
-    .cards.view-grid .card .badges { margin-top: 10px; }
-    .cards.view-grid .card .pay-only {
-      margin-top: auto; padding-top: 12px;
-      border-top: 1px dashed var(--border);
-      display: flex; justify-content: space-between; align-items: baseline;
-    }
-    .cards.view-grid .card .pay-label {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
-      color: var(--muted); font-weight: 700;
-    }
-    .cards.view-grid .card .pay-only .pay {
-      font-size: 18px;
-    }
-
-    /* Selected-count badge — top-left so it doesn't fight the pay text */
-    .sel-corner {
-      position: absolute; top: 14px; left: 16px;
-      padding: 3px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
-      background: linear-gradient(135deg, #137333, #2d8e7f); color: white;
-      box-shadow: 0 2px 6px rgba(19,115,51,0.25); z-index: 1;
-    }
-    .sel-corner.zero {
-      background: #f1eef8; color: #6c6a78; box-shadow: none;
-    }
-    .card.has-sel { padding-top: 38px; }
-
-    /* Info rows shown on each card (CGPA, branches, selected, skills) */
-    .info-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
-    .info-row {
-      display: flex; gap: 8px; font-size: 12.5px; line-height: 1.45;
-    }
-    .info-row .ilabel {
-      min-width: 78px; flex-shrink: 0; font-size: 10.5px; text-transform: uppercase;
-      letter-spacing: 0.5px; font-weight: 700; color: var(--muted); padding-top: 1px;
-    }
-    .info-row .ival { color: #2a2a32; flex: 1; word-break: break-word; }
-    .info-row .ival strong { color: #5a1eb4; }
-    .info-row .ival.empty { color: #aaa; font-style: italic; }
-    .cards.view-grid .card .card-head .pay { display: none; }
-    .cards.view-list .card .pay-only { display: none; }
-
-    /* Modal */
-    .modal {
-      position: fixed; inset: 0; z-index: 1000;
-      display: flex; align-items: center; justify-content: center;
-      animation: fadein 0.18s ease;
-    }
-    @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
-    .modal[hidden] { display: none !important; }
-    .modal-overlay {
-      position: absolute; inset: 0; background: rgba(20,15,40,0.55);
-      backdrop-filter: blur(2px);
-    }
-    .modal-content {
-      position: relative; background: white; border-radius: 16px;
-      max-width: 760px; width: 92%; max-height: 88vh; overflow-y: auto;
-      padding: 24px 28px; box-shadow: 0 12px 40px rgba(0,0,0,0.25);
-      animation: pop 0.22s cubic-bezier(0.2, 0.9, 0.4, 1.4);
-    }
-    @keyframes pop { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-    .modal-close {
-      position: absolute; top: 12px; right: 14px;
-      width: 32px; height: 32px; border-radius: 50%;
-      border: none; background: #f1eef8; color: #5a1eb4; font-size: 18px;
-      font-weight: 700; cursor: pointer; line-height: 1;
-    }
-    .modal-close:hover { background: #e8e3f3; }
-    .modal-content h2 {
-      margin: 0 0 6px; font-size: 22px; font-weight: 800;
-      background: var(--grad-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      padding-right: 36px;
-    }
-    .modal-content .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    body {
+      background-color: #0b0b0e;
+      color: #e4e4e7;
+    }
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0b0b0e;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #272730;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+    
+    .dual-slider input[type="range"] {
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+    }
+    .dual-slider input[type="range"]::-webkit-slider-thumb {
+      pointer-events: auto;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ffffff;
+      cursor: pointer;
+      -webkit-appearance: none;
+      border: 1px solid #71717a;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+    .dual-slider input[type="range"]::-moz-range-thumb {
+      pointer-events: auto;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ffffff;
+      cursor: pointer;
+      border: 1px solid #71717a;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+    @media print {
+      body {
+        background: #ffffff;
+        color: #000000;
+        font-size: 10px;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+    
+    /* Light Theme Overrides */
+    html:not(.dark) body { background-color: #ffffff; color: #18181b; }
+    html:not(.dark) .bg-\[\#141418\] { background-color: #f5f5f5; }
+    html:not(.dark) .border-\[\#1e1e24\], html:not(.dark) .border-\[\#27272a\] { border-color: #d4d4d8; }
+    html:not(.dark) .text-white, html:not(.dark) .text-zinc-100 { color: #09090b; }
+    html:not(.dark) .text-zinc-300, html:not(.dark) .text-zinc-400 { color: #52525b; }
+    html:not(.dark) .text-zinc-500 { color: #71717a; }
+    html:not(.dark) .bg-\[\#070709\]\/95 { background-color: rgba(255,255,255,0.95); }
+    html:not(.dark) .border-\[\#18181c\] { border-color: #e4e4e7; }
+    html:not(.dark) .bg-\[\#27272a\] { background-color: #e4e4e7; color: #000; }
+    html:not(.dark) .bg-zinc-800 { background-color: #e4e4e7; }
+    html:not(.dark) .text-\[\#22c55e\] { color: #16a34a; }
+    html:not(.dark) .hover\:bg-\[\#1e1e24\]:hover { background-color: #e5e5e5; }
+    html:not(.dark) ::-webkit-scrollbar-track { background: #f1f0e1; }
+    html:not(.dark) ::-webkit-scrollbar-thumb { background: #a1a1aa; }
+    html:not(.dark) #histogramContainer path { fill: #506385 !important; }
+    html:not(.dark) #sliderTrackActive { background-color: #506385 !important; }
+    html:not(.dark) .bg-\[\#1c1c24\] { background-color: #ffffff !important; color: #18181b !important; border-color: #d4d4d8 !important; }
   </style>
 </head>
-<body>
-  <header>
-    <h1>JUST TNP Viewer <span id="versionPill" style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:linear-gradient(135deg,#5a1eb4,#f03c82);color:white;-webkit-text-fill-color:white;background-clip:initial;-webkit-background-clip:initial;vertical-align:middle;margin-left:6px;">v?</span></h1>
-    <div class="meta"><span id="stamp">Loading…</span> · <span id="counter">0 of 0</span></div>
+<body class="font-sans antialiased selection:bg-zinc-800 selection:text-white min-h-screen flex flex-col">
 
-    <div class="controls">
-      <div class="search-wrap">
-        <input type="text" id="search" placeholder="Search company, role, location, JD…" autofocus />
+  <header class="no-print sticky top-0 z-40 bg-[#070709]/95 backdrop-blur-md border-b border-[#18181c] px-6 py-4">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <h1 class="text-xl font-bold tracking-tight text-white m-0 font-space flex items-center gap-2">
+          TnP Scrapper
+          <span id="versionPill" class="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">STANDALONE</span>
+        </h1>
       </div>
-      <select id="sort">
-        <option value="ctc-asc">Sort: CTC low → high</option>
-        <option value="ctc-desc">Sort: CTC high → low</option>
-        <option value="selected-desc">Sort: Most selected</option>
-        <option value="applicants-desc">Sort: Most applicants</option>
-        <option value="deadline">Sort: Deadline (soonest)</option>
-        <option value="company-asc">Sort: Company A → Z</option>
-      </select>
-      <span class="pill" id="branchPill">All branches</span>
-      <div class="view-toggle">
-        <button id="viewList" class="view-btn active">📋 List</button>
-        <button id="viewGrid" class="view-btn">🔳 Grid</button>
-      </div>
-      <div style="flex-grow:1"></div>
-      <button id="dlCSV" class="dl">⬇ CSV</button>
-      <button id="dlXLSX" class="dl">⬇ Excel</button>
-      <button id="dlPDF" class="dl primary">⬇ PDF</button>
-    </div>
 
-    <div class="slider-wrap">
-      <div class="slider-label">
-        <span>CTC range (annualised)</span>
-        <span class="value" id="rangeDisplay">—</span>
+      <div class="w-full sm:max-w-lg relative">
+        <div class="relative w-full bg-[#141418] rounded-md flex items-center px-3 py-2 border border-[#27272a] focus-within:border-zinc-500 transition-colors">
+          <svg class="w-4 h-4 text-zinc-500 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input 
+            type="text" 
+            id="searchInput"
+            placeholder="Search company, job role, description, skills..."
+            class="w-full bg-transparent text-zinc-200 text-xs border-0 focus:outline-none p-0 placeholder-zinc-500"
+          />
+          <button 
+            id="clearSearch"
+            class="hidden text-zinc-500 hover:text-white ml-1.5 focus:outline-none"
+            type="button"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
       </div>
-      <div class="dual" id="dual">
-        <div class="track"></div>
-        <div class="active" id="active"></div>
-        <input type="range" id="minRange" min="0" max="100" value="0" step="0.5" />
-        <input type="range" id="maxRange" min="0" max="100" value="100" step="0.5" />
+
+      <div class="flex items-center gap-4 text-zinc-500">
+        <button id="themeToggleBtn" class="hover:text-white transition-colors flex items-center justify-center p-1.5 rounded-md border border-[#27272a] bg-[#141418] hover:bg-[#1e1e24] cursor-pointer" title="Toggle Theme">
+          <!-- Sun Icon (shown in dark mode) -->
+          <svg id="themeIconLight" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+          <!-- Moon Icon (shown in light mode) -->
+          <svg id="themeIconDark" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+        </button>
       </div>
     </div>
   </header>
 
-  <main>
-    <div id="insightsRow" class="insights"></div>
-
-    <div class="charts">
-      <div class="chart-card">
-        <div class="chart-title">CTC distribution (current filter)</div>
-        <div class="chart-body" id="ctcBarChart"></div>
+  <div class="no-print max-w-7xl mx-auto w-full px-6 pt-6 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="relative">
+        <select 
+          id="sortBySelect"
+          class="bg-[#141418] border border-[#27272a] text-zinc-300 pl-3 pr-8 py-1.5 rounded-md text-xs font-semibold cursor-pointer hover:border-zinc-500 transition-colors focus:outline-none appearance-none"
+        >
+          <option value="ctc-desc">Sort: CTC High → Low</option>
+          <option value="ctc-asc">Sort: CTC Low → High</option>
+          <option value="selected-desc">Sort: Most Recruits</option>
+          <option value="applicants-desc">Sort: Highest Applicants</option>
+          <option value="company-asc">Sort: Company (A → Z)</option>
+        </select>
+        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-zinc-500">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </div>
       </div>
-      <div class="chart-card">
-        <div class="chart-title">Selected by branch</div>
-        <div class="chart-body" id="branchPieChart"></div>
+
+      <div class="relative">
+        <button
+          id="branchToggleBtn"
+          class="bg-[#141418] border border-[#27272a] text-zinc-350 px-3.5 py-1.5 rounded-md text-xs font-semibold hover:border-zinc-500 hover:text-white transition-colors flex items-center gap-1.5"
+          type="button"
+        >
+          <span id="selectedBranchesLabel">Branches: All Active</span>
+          <svg class="w-3 h-3 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+
+        <div id="branchDropdown" class="hidden absolute left-0 mt-2 w-56 bg-[#141418] border border-[#27272a] rounded-lg shadow-xl p-3 z-50 flex flex-col gap-1.5">
+          <div class="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1 border-b border-zinc-800 pb-1.5 flex justify-between items-center">
+            <span>Filter disciplines</span>
+            <button id="resetBranchesBtn" class="text-zinc-400 hover:text-white cursor-pointer hover:underline text-[9px]">Reset All</button>
+          </div>
+          <div id="branchCheckboxContainer" class="flex flex-col gap-1"></div>
+        </div>
       </div>
     </div>
 
-    <div class="ai-panel">
-      <div class="ai-panel-head">
-        <h3>✨ AI Insights</h3>
-        <button class="ai-btn" id="genInsightsBtn">Generate Insights</button>
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="bg-[#141418] border border-[#27272a] rounded-md p-1 flex items-center">
+        <button 
+          id="viewModeList" 
+          class="px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all text-zinc-500 hover:text-white"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          List
+        </button>
+        <button 
+          id="viewModeGrid" 
+          class="px-3 py-1 rounded-sm text-xs font-semibold flex items-center gap-1.5 transition-all bg-[#27272a] text-white"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"/></svg>
+          Grid
+        </button>
       </div>
-      <div class="ai-content empty" id="aiContent">Click "Generate Insights" to ask Groq for trends, standouts, and a recommendation across the filtered companies. Requires a Groq key in Settings.</div>
-    </div>
 
-    <div id="cards" class="cards view-list" style="margin-top: 20px;">
-      <div class="empty">Loading scrape data…</div>
-    </div>
-  </main>
-
-  <div class="modal" id="modal" hidden>
-    <div class="modal-overlay" id="modalOverlay"></div>
-    <div class="modal-content">
-      <button class="modal-close" id="modalClose" type="button">×</button>
-      <div id="modalBody"></div>
+      <div class="flex items-center gap-2">
+        <button 
+          id="exportCsvBtn"
+          class="bg-[#141418] border border-[#27272a] text-zinc-350 px-3 py-1.5 rounded-md text-xs font-semibold hover:border-zinc-500 hover:text-white transition-all flex items-center gap-1.5"
+          title="Export CSV spreadsheet"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          CSV
+        </button>
+        <button 
+          id="printDossierBtn"
+          class="bg-[#141418] border border-[#27272a] text-zinc-350 px-3 py-1.5 rounded-md text-xs font-semibold hover:border-zinc-500 hover:text-white transition-all flex items-center gap-1.5"
+          title="Print official Recruitment Handbook / Dossier"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-3a2 2 0 00-2-2H9a2 2 0 00-2 2v3a2 2 0 002 2zm5-11h.01M10 10h.01"/></svg>
+          Print/Dossier
+        </button>
+      </div>
     </div>
   </div>
+
+  <main class="flex-grow max-w-7xl mx-auto w-full px-6 py-6 flex flex-col gap-6">
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-4 flex flex-col justify-between">
+        <div>
+          <span class="text-[10px] tracking-wider text-zinc-500 uppercase font-semibold">Listed Companies</span>
+          <h2 class="text-2xl font-bold font-space text-white mt-1" id="statCompanyCount">0</h2>
+        </div>
+        <span class="text-[10px] text-zinc-500 mt-2" id="statCompanyTotalLabel">of 0 registered notices</span>
+      </div>
+
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-4 flex flex-col justify-between">
+        <div>
+          <span class="text-[10px] tracking-wider text-zinc-500 uppercase font-semibold">Avg Package (CTC)</span>
+          <h2 class="text-2xl font-bold font-mono text-zinc-100 mt-1" id="statAvgPackage">₹0.00 LPA</h2>
+        </div>
+        <span class="text-[10px] text-emerald-500 font-medium mt-2" id="statMedianPackage">Median: ₹0.00 LPA</span>
+      </div>
+
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-4 flex flex-col justify-between">
+        <div>
+          <span class="text-[10px] tracking-wider text-zinc-500 uppercase font-semibold">Highest CTC</span>
+          <h2 class="text-xl font-bold text-white mt-1.5 truncate" id="statHighestCompany">N/A</h2>
+        </div>
+        <span class="text-[10px] text-zinc-400 font-mono mt-1" id="statHighestValue">₹0.00 LPA</span>
+      </div>
+
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-4 flex flex-col justify-between">
+        <div>
+          <span class="text-[10px] tracking-wider text-zinc-500 uppercase font-semibold">TNP Nominees</span>
+          <h2 class="text-2xl font-bold font-space text-white mt-1" id="statTotalApplicants">0</h2>
+        </div>
+        <span class="text-[10px] text-zinc-500 mt-2" id="statTopRecruiter">Total Applicants</span>
+      </div>
+
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-4 flex flex-col justify-between">
+        <div>
+          <span class="text-[10px] tracking-wider text-zinc-500 uppercase font-semibold">Placed Selects</span>
+          <h2 class="text-2xl font-bold font-space text-[#22c55e] mt-1" id="statTotalSelects">0</h2>
+        </div>
+        <span class="text-[10px] text-zinc-400 font-medium mt-2" id="statConversionRate">0% conversion rate</span>
+      </div>
+    </div>
+
+    <div class="no-print bg-[#141418] border border-[#1e1e24] rounded-lg p-5 w-full">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-[10px] tracking-wider text-zinc-500 font-semibold uppercase">CTC Package Bracket Filter</span>
+        <span class="text-sm font-semibold font-mono text-white" id="sliderValueLabel">
+          ₹0.0 LPA - ₹100LPA+
+        </span>
+      </div>
+      <div class="dual-slider relative h-6 flex items-center">
+        <div class="absolute w-full h-[3px] bg-zinc-800 rounded-full"></div>
+        <div id="sliderTrackActive" class="absolute h-[3px] rounded-full" style="background-color: #22c55e; left: 0%; right: 0%;"></div>
+        <input type="range" id="minCbcSlider" min="0" max="100" step="0.5" value="0" style="position: absolute; left: 0; width: 100%; height: 24px;">
+        <input type="range" id="maxCbcSlider" min="0" max="100" step="0.5" value="100" style="position: absolute; left: 0; width: 100%; height: 24px;">
+      </div>
+    </div>
+
+    <div class="no-print grid gap-6 w-full" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));">
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-5 flex flex-col justify-between min-h-[220px]">
+        <div class="text-[10px] tracking-wider text-zinc-500 font-semibold uppercase mb-4">CTC range distribution segments</div>
+        <div class="flex-grow w-full h-full pt-2 pb-1" id="histogramContainer"></div>
+      </div>
+
+      <div class="bg-[#141418] border border-[#1e1e24] rounded-lg p-5 flex flex-col justify-between min-h-[220px]">
+        <div class="text-[10px] tracking-wider text-zinc-500 font-semibold uppercase mb-4">Hires by branch contribution</div>
+        <div class="flex flex-col sm:flex-row items-center justify-around gap-6 flex-grow py-1">
+          <div class="relative w-32 h-32 flex-shrink-0">
+            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36" id="donutSvg">
+              <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#232328" stroke-width="3"></circle>
+            </svg>
+            <div class="absolute inset-0 flex items-center justify-center">
+              <div class="bg-[#1c1c24] border border-[#2d2d39] px-3.5 py-1.5 rounded-lg flex flex-col items-center justify-center min-w-[70px]">
+                <span id="donutCenterCount" class="text-base font-bold text-white leading-none">0</span>
+                <span id="donutCenterLabel" class="text-[7.5px] uppercase tracking-wider text-zinc-500 font-bold mt-1">HIRES</span>
+              </div>
+            </div>
+          </div>
+          <div class="flex-grow flex flex-col gap-2 max-h-36 overflow-y-auto w-full sm:max-w-[140px]" id="donutLegend"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="aiSection" class="no-print bg-[#141418] border border-[#1e1e24] rounded-lg p-6 flex flex-col gap-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="flex items-start gap-3">
+          <svg class="w-6 h-6 text-zinc-400 mt-1 flex-shrink-0 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L11 3z"/></svg>
+          <div>
+            <h3 class="text-sm font-semibold text-white">AI Analysis & Seasonal Summary</h3>
+            <p class="text-xs text-zinc-400 mt-1 leading-normal">
+              Analyze structural trends, CTC package brackets outliers, first-career shortlisting guidelines and eligibility parameters.
+            </p>
+          </div>
+        </div>
+        <button 
+          id="btnGenerateInsights" 
+          class="bg-[#e4e4e7] hover:bg-white text-[#0b0b0e] font-bold px-4 py-2 rounded-md text-xs transition-colors shrink-0 flex items-center gap-2"
+        >
+          <span id="aiBtnText">Generate Intelligence Report</span>
+        </button>
+      </div>
+
+      <div id="aiReportWrap" class="hidden text-left bg-black/40 border border-zinc-800 p-5 rounded-lg">
+        <div class="prose max-w-none text-zinc-300 text-xs sm:text-sm leading-relaxed" id="aiReportBox"></div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
+      <div id="noticesContainer" class="md:col-span-4 grid gap-4 transition-all duration-300"></div>
+    </div>
+
+  </main>
+
+  <div id="detailsModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="fixed inset-0 bg-black/80 backdrop-blur-sm" id="modalOverlay"></div>
+    <div class="relative bg-[#141418] border border-[#27272a] rounded-lg max-w-2xl w-full p-6 shadow-2xl overflow-y-auto max-h-[85vh] text-left z-10">
+      <button 
+        id="modalCloseBtn"
+        class="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full bg-[#1e1e24] text-zinc-400 hover:text-white hover:bg-zinc-805 text-sm transition-colors"
+      >
+        ✕
+      </button>
+
+      <div>
+        <span class="text-[9.5px] uppercase font-bold tracking-widest px-2.5 py-1 rounded bg-[#dc2626]/20 text-[#f87171] font-mono" id="modalType">TYPE</span>
+        <h2 class="text-2xl font-bold font-space text-white mt-3" id="modalCompany">Company</h2>
+        <p class="text-zinc-400 text-sm mt-1 font-mono" id="modalDesignation">Designation</p>
+      </div>
+
+      <div class="border-t border-zinc-800 my-4"></div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <span class="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Compensation Package</span>
+          <p class="text-lg font-bold text-white mt-1" id="modalCTC">₹0.0 LPA</p>
+          <div class="text-[11px] text-zinc-400 mt-1 flex flex-col gap-0.5">
+            <span id="modalBasePay">Base Pay: ₹0</span>
+            <span id="modalBonus">Bonus / Variable: ₹0</span>
+            <span id="modalStipend">Stipend (UG/PG): ₹0 / mo</span>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Eligibility Rules</span>
+          <p class="text-xs font-semibold text-zinc-300 mt-1" id="modalCourses">Courses: CSE, ECE, IT</p>
+          <div class="text-[11px] text-zinc-400 mt-1 flex flex-col gap-0.5">
+            <span id="modalMinCGPA">Required CGPA Circuital / Non: 7.5</span>
+            <span id="modalCritUG">UG criteria: N/A</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-[#0b0b0e] border border-zinc-800/80 rounded-md p-4 mt-5">
+        <span class="text-[9px] uppercase tracking-wider text-zinc-500 font-bold block mb-3">TNP Recruitment funnel breakdown</span>
+        <div class="flex items-center gap-4 text-center justify-around">
+          <div>
+            <span class="text-[10px] text-zinc-500 uppercase block">Candidates</span>
+            <span class="text-xl font-extrabold text-white font-mono mt-1 block" id="modalApplicantsCount">0</span>
+            <span class="text-[9px] text-zinc-500 leading-tight block mt-1" id="modalApplicantsByBranch">CSE: 0</span>
+          </div>
+          <div class="text-zinc-650 flex items-center justify-center">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+          </div>
+          <div>
+            <span class="text-[10px] text-zinc-500 uppercase block">Offers Extended</span>
+            <span class="text-xl font-extrabold text-[#22c55e] font-mono mt-1 block" id="modalSelectedCount">0</span>
+            <span class="text-[9px] text-emerald-550 block mt-1" id="modalSelectedByBranch">CSE: 0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-5">
+        <span class="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold block mb-1">Notice Description details</span>
+        <p class="text-xs text-zinc-300 font-normal leading-relaxed text-left max-h-40 overflow-y-auto whitespace-pre-wrap pr-1" id="modalJobDescription">Detailed notices...</p>
+      </div>
+
+      <div class="mt-5" id="modalWinnerBlock">
+        <span class="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold block mb-1.5">Extended placements select checklist</span>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-32 overflow-y-auto" id="modalWinnerNameList"></div>
+      </div>
+
+      <div class="border-t border-zinc-800 mt-6 pt-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="text-zinc-550 text-[11px] font-mono">
+          <span class="block" id="modalPostDate">Posted on: N/A</span>
+          <span class="block text-[#ef4444] font-semibold" id="modalDeadline">Deadline: N/A</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a id="modalWebUrl" href="#" target="_blank" class="px-3.5 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-white transition-colors">
+            Official Portal
+          </a>
+          <a id="modalApplyUrl" href="#" target="_blank" class="px-3.5 py-1.5 rounded bg-zinc-100 hover:bg-white text-xs font-bold text-black transition-colors">
+            View Notice Details
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="no-print border-t border-[#18181c] bg-[#070709] px-6 py-4 text-center mt-auto">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5">
+      <p class="text-zinc-500 text-xs m-0 font-medium tracking-wide">
+        &copy; 2026 TnP Scrapper
+      </p>
+      <div class="text-xs text-zinc-500 font-medium">
+        Report an issue : 
+        <a class="hover:text-primary transition-colors text-zinc-400" href="https://github.com/mightbeanshuu" target="_blank">@mightbeanshuu</a>
+        <span class="mx-1">&middot;</span>
+        <a class="hover:text-primary transition-colors text-zinc-400" href="https://github.com/iammdzaidalam" target="_blank">@iammdzaidalam</a>
+      </div>
+    </div>
+  </footer>
 
   <script src="viewer.js"></script>
 </body>

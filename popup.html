@@ -1,197 +1,202 @@
 <!DOCTYPE html>
-<html>
+<html class="dark" lang="en">
 <head>
-  <meta charset="utf-8" />
-  <style>
-    :root {
-      --grad: linear-gradient(135deg, #5a1eb4 0%, #f03c82 55%, #ffb432 100%);
-      --grad-text: linear-gradient(90deg, #5a1eb4, #f03c82, #ffb432);
-      --bg: #fbfaff;
-      --card: #ffffff;
-      --border: #e8e3f3;
-      --text: #1a1a23;
-      --muted: #6c6a78;
-      --ok: #137333;
-      --warn: #c5221f;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; }
-    body {
-      width: 380px; font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
-      background: var(--bg); color: var(--text); font-size: 13px;
-    }
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Chrome Extension Popup - Scraper</title>
+<script src="popup.js" defer></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet"/>
+<link href="tailwind.css" rel="stylesheet"/>
+<style>
+html {
+    background-color: transparent;
+    
+}
+body {
+    width: 640px;
+    min-height: 400px;
+    overflow-x: hidden;
+    background-color: #0f0f0f; /* Base level 0 */
+    color: #e4e2e3;
+    margin: 0; padding: 0;
+}
 
-    .titlebar {
-      padding: 16px 18px 14px;
-      background: var(--grad);
-      color: white;
-    }
-    .titlebar h1 {
-      margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .titlebar .v {
-      font-size: 10px; font-weight: 700; background: rgba(255,255,255,0.22);
-      padding: 2px 7px; border-radius: 999px; letter-spacing: 0.5px;
-    }
-    .titlebar .sub { margin-top: 4px; font-size: 11px; opacity: 0.9; }
+.bento-card {
+    background-color: #1a1a1a; /* Level 1 */
+    border: 1px solid #2a2a2a;
+    height: 100%;
+}
 
-    .body { padding: 14px 16px 16px; }
+.bento-card:hover {
+    background-color: #1c1c1c;
+}
 
-    .card {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 11px 12px; margin-bottom: 10px;
-    }
-    .card-title {
-      font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
-      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
-    }
+/* Custom Scrollbar for compact spaces */
+::-webkit-scrollbar {
+    width: 4px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #2a2a2a;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #43474c;
+}
 
-    .pills { display: flex; gap: 6px; flex-wrap: wrap; }
-    .pill-chk {
-      cursor: pointer; user-select: none;
-      padding: 6px 12px; border-radius: 999px;
-      background: #f1eef8; color: #5a1eb4; font-weight: 700; font-size: 12px;
-      border: 1.5px solid transparent; transition: background 0.15s ease, border-color 0.15s ease;
-    }
-    .pill-chk:hover { background: #ebe5f7; }
-    .pill-chk input { display: none; }
-    .pill-chk.on {
-      background: var(--grad); color: white; border-color: transparent;
-      box-shadow: 0 2px 6px rgba(90, 30, 180, 0.25);
-    }
+/* Switch styling */
+.switch-peer:checked ~ .switch-bg {
+    background-color: #b6c8de;
+}
+.switch-peer:checked ~ .switch-bg .switch-dot {
+    transform: translateX(100%);
+    background-color: #1a1a1a;
+}
 
-    .range-row { display: flex; gap: 10px; }
-    .range-row label { flex: 1; font-size: 11px; color: var(--muted); font-weight: 600; }
-    .range-row input {
-      width: 100%; margin-top: 4px; padding: 7px 9px;
-      border: 1px solid var(--border); border-radius: 7px; font-size: 12px;
-      outline: none; transition: border-color 0.15s;
-    }
-    .range-row input:focus { border-color: #5a1eb4; }
+/* Pill styling */
+.pill-chk {
+  background-color: transparent; border-color: #2a2a2a; color: #808080;
+}
+.pill-chk:hover { border-color: #43474c; color: #e4e2e3; }
+.pill-chk.on {
+  background-color: #252525; border-color: rgba(182, 200, 222, 0.3); color: #b6c8de;
+}
 
-    .select { width: 100%; padding: 8px 9px; border: 1px solid var(--border);
-      border-radius: 7px; font-size: 12px; background: white; outline: none; }
-    .select:focus { border-color: #5a1eb4; }
-
-    .toggle-row {
-      display: flex; align-items: center; gap: 9px;
-      padding: 6px 0; font-size: 12px;
-    }
-    .toggle-row + .toggle-row { border-top: 1px dashed var(--border); }
-    .switch {
-      position: relative; width: 32px; height: 18px; flex-shrink: 0;
-      background: #e0dceb; border-radius: 999px; transition: background 0.18s;
-      cursor: pointer;
-    }
-    .switch::after {
-      content: ""; position: absolute; top: 2px; left: 2px;
-      width: 14px; height: 14px; border-radius: 50%;
-      background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
-      transition: left 0.18s;
-    }
-    .switch input { display: none; }
-    .switch.on { background: linear-gradient(135deg, #5a1eb4, #f03c82); }
-    .switch.on::after { left: 16px; }
-    .toggle-row .text { flex: 1; line-height: 1.35; }
-    .toggle-row .text small { display: block; color: var(--muted); font-size: 10.5px; margin-top: 1px; }
-
-    button {
-      width: 100%; padding: 11px 14px; border: none; border-radius: 9px;
-      font-size: 13px; font-weight: 700; cursor: pointer;
-      transition: transform 0.08s ease, box-shadow 0.15s ease, opacity 0.15s;
-    }
-    button:active { transform: scale(0.98); }
-    button:disabled { cursor: not-allowed; opacity: 0.55; }
-
-    .btn-primary {
-      background: var(--grad); color: white; margin-top: 4px;
-      box-shadow: 0 3px 10px rgba(90, 30, 180, 0.25);
-    }
-    .btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(90, 30, 180, 0.35); }
-    .btn-viewer {
-      background: white; color: #5a1eb4; margin-top: 8px;
-      border: 1.5px solid #5a1eb4;
-    }
-    .btn-viewer:hover:not(:disabled) { background: #faf6ff; }
-    .btn-mini {
-      flex: 1; padding: 8px 10px; font-size: 11.5px; font-weight: 600;
-      background: #f1eef8; color: #5a1eb4;
-    }
-    .btn-mini:hover:not(:disabled) { background: #ebe5f7; }
-    .btn-row { display: flex; gap: 8px; margin-top: 8px; }
-
-    #status {
-      margin-top: 12px; padding: 10px 12px;
-      background: #1a1a23; color: #e6e4f0; font-size: 11px;
-      border-radius: 9px; max-height: 180px; overflow-y: auto;
-      white-space: pre-wrap; font-family: ui-monospace, "SF Mono", monospace;
-      line-height: 1.45;
-    }
-    #status:empty { display: none; }
-    .ai-state.ok { color: var(--ok); }
-    .ai-state.bad { color: var(--warn); }
-  </style>
+#status:empty { display: none; }
+#status:not(:empty) { 
+  display: block; padding: 8px; border: 1px solid #2a2a2a; 
+  border-radius: 4px; background: #1a1a1a; margin-top: 12px; 
+  font-family: "JetBrains Mono", monospace; font-size: 11px; color: #8e9196;
+  max-height: 120px; overflow-y: auto; white-space: pre-wrap;
+}
+</style>
 </head>
-<body>
-  <div class="titlebar">
-    <h1>✦ JUST TNP Scraper <span class="v" id="versionPill">v?</span></h1>
-    <div class="sub">tp.bitmesra.co.in · paginated scrape · viewer + AI insights</div>
+<body class="flex flex-col p-md bg-[#0f0f0f] font-body-sm text-body-sm antialiased rounded-xl overflow-hidden shadow-lg border border-[#2a2a2a]">
+<!-- Header -->
+<header class="flex justify-between items-center mb-md pb-xs border-b border-[#2a2a2a]">
+  <div class="flex items-center gap-sm">
+    <img src="icons/icon128.png" alt="TNP Scraper Logo" class="w-5 h-5 object-contain" />
+    <h1 class="font-headline-sm text-headline-sm text-on-surface tracking-tight" style="margin:0">TNP Scraper</h1>
+  </div>
+  <div class="flex items-center gap-xs">
+    <span id="versionPill" class="font-data-mono text-data-mono text-outline px-2 py-1 bg-surface-container-high rounded-sm">v?</span>
+  </div>
+</header>
+
+<!-- Bento Grid Container -->
+<main class="grid gap-sm flex-grow overflow-y-auto pr-xs pb-sm grid-cols-12">
+  
+  <!-- Target Branches Card -->
+  <div class="bento-card col-span-12 rounded-lg p-sm flex flex-col gap-sm">
+    <div class="flex justify-between items-center">
+      <h2 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest" style="margin:0">Target Branches</h2>
+      <div class="flex gap-xs">
+        <button id="branchAll" class="font-label-caps text-label-caps text-primary hover:text-primary-fixed transition-colors">Select all</button>
+        <span class="text-outline-variant">·</span>
+        <button id="branchNone" class="font-label-caps text-label-caps text-outline hover:text-on-surface transition-colors">Clear</button>
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-xs">
+      <label id="pill-cse" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchCSE" class="hidden" checked/> CSE</label>
+      <label id="pill-it" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchIT" class="hidden" checked/> IT</label>
+      <label id="pill-aiml" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchAIML" class="hidden" checked/> AIML</label>
+      <label id="pill-mc" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchMC" class="hidden" checked/> M&amp;C</label>
+      <label id="pill-ece" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchECE" class="hidden" checked/> ECE</label>
+      <label id="pill-eee" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchEEE" class="hidden"/> EEE</label>
+      <label id="pill-me" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchME" class="hidden"/> ME</label>
+      <label id="pill-ce" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchCE" class="hidden"/> CE</label>
+      <label id="pill-chem" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchCHEM" class="hidden"/> CHEM</label>
+      <label id="pill-bt" class="pill-chk cursor-pointer px-sm py-1 rounded border font-body-sm transition-colors"><input type="checkbox" id="branchBT" class="hidden"/> BT</label>
+    </div>
   </div>
 
-  <div class="body">
-
-    <div class="card">
-      <div class="card-title">Branches (OR filter) · click to toggle</div>
-      <div class="pills">
-        <label class="pill-chk" id="pill-cse"><input type="checkbox" id="branchCSE" checked /> CSE</label>
-        <label class="pill-chk" id="pill-it"><input type="checkbox" id="branchIT" checked /> IT</label>
-        <label class="pill-chk" id="pill-aiml"><input type="checkbox" id="branchAIML" checked /> AIML</label>
-        <label class="pill-chk" id="pill-mc"><input type="checkbox" id="branchMC" checked /> M&amp;C</label>
-        <label class="pill-chk" id="pill-ece"><input type="checkbox" id="branchECE" checked /> ECE</label>
-        <label class="pill-chk" id="pill-eee"><input type="checkbox" id="branchEEE" /> EEE</label>
-        <label class="pill-chk" id="pill-me"><input type="checkbox" id="branchME" /> ME</label>
-        <label class="pill-chk" id="pill-ce"><input type="checkbox" id="branchCE" /> CE</label>
-        <label class="pill-chk" id="pill-chem"><input type="checkbox" id="branchCHEM" /> CHEM</label>
-        <label class="pill-chk" id="pill-bt"><input type="checkbox" id="branchBT" /> BT</label>
+  <!-- CTC Range Card -->
+  <div class="bento-card col-span-12 rounded-lg p-sm flex flex-col gap-sm">
+    <h2 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest flex items-center gap-1" style="margin:0">
+      CTC Range <span class="text-outline-variant normal-case font-data-mono text-[10px]">(LPA)</span> <span class="text-outline-variant">·</span> <span class="normal-case text-[10px] text-outline">MONTHLY STIPEND ANNUALISED ×12</span>
+    </h2>
+    <div class="flex items-center gap-sm mt-xs">
+      <div class="flex-1 flex flex-col gap-1">
+        <label class="font-label-caps text-[10px] text-outline">MIN</label>
+        <input id="minCTC" class="w-full bg-[#0f0f0f] border border-[#2a2a2a] rounded px-sm py-1 text-on-surface font-data-mono focus:border-primary focus:ring-0 transition-colors" type="number" step="0.5" placeholder="0"/>
       </div>
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button type="button" id="branchAll" class="btn-mini" style="padding:5px 10px;">Select all</button>
-        <button type="button" id="branchNone" class="btn-mini" style="padding:5px 10px;">Clear</button>
+      <div class="w-4 h-[1px] bg-[#2a2a2a] mt-4"></div>
+      <div class="flex-1 flex flex-col gap-1">
+        <label class="font-label-caps text-[10px] text-outline">MAX</label>
+        <input id="maxCTC" class="w-full bg-[#0f0f0f] border border-[#2a2a2a] rounded px-sm py-1 text-on-surface font-data-mono focus:border-primary focus:ring-0 transition-colors placeholder:text-outline-variant" type="number" step="0.5" placeholder="any"/>
       </div>
     </div>
-
-    <div class="card">
-      <div class="card-title">CTC range (LPA) · monthly stipend annualised ×12</div>
-      <div class="range-row">
-        <label>Min<input type="number" id="minCTC" min="0" step="0.5" placeholder="0" /></label>
-        <label>Max<input type="number" id="maxCTC" min="0" step="0.5" placeholder="any" /></label>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Options</div>
-      <label class="toggle-row" id="row-results">
-        <span class="switch on" id="sw-results"><input type="checkbox" id="fetchResults" checked /></span>
-        <span class="text">Include final-round selected candidates <small>Adds ~1 min per 150 companies</small></span>
-      </label>
-      <label class="toggle-row" id="row-ai">
-        <span class="switch" id="sw-ai"><input type="checkbox" id="useAI" /></span>
-        <span class="text">AI enrichment (Groq) <small><span id="aiStatus" class="ai-state"></span></small></span>
-      </label>
-    </div>
-
-    <button id="scrapeBtn" class="btn-primary">⚡ Scrape now</button>
-    <button id="viewerBtn" class="btn-viewer">📊 Open Viewer ↗</button>
-
-    <div class="btn-row">
-      <button id="inspectBtn" class="btn-mini">Inspect DOM</button>
-      <button id="settingsBtn" class="btn-mini">Settings</button>
-    </div>
-
-    <div id="status"></div>
   </div>
 
-  <script src="popup.js"></script>
+  <!-- Options Card -->
+  <div class="bento-card col-span-7 rounded-lg p-sm flex flex-col gap-md">
+    <h2 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest sr-only" style="margin:0">Options</h2>
+    <div class="flex items-start justify-between gap-md group">
+      <div class="flex flex-col">
+        <span class="font-body-md text-on-surface group-hover:text-white transition-colors">Include final-round selected</span>
+        <span class="font-body-sm text-[12px] text-outline mt-0.5">Adds ~1 min per 150 companies</span>
+      </div>
+      <label class="relative inline-flex items-center cursor-pointer mt-1" id="sw-results">
+        <input id="fetchResults" checked="" class="sr-only switch-peer" type="checkbox"/>
+        <div class="switch-bg w-8 h-4 bg-[#2a2a2a] rounded-full peer-focus:outline-none transition-colors duration-200">
+          <div class="switch-dot absolute top-[2px] left-[2px] bg-outline h-3 w-3 rounded-full transition-transform duration-200"></div>
+        </div>
+      </label>
+    </div>
+    
+    <div class="h-[1px] w-full bg-[#2a2a2a]"></div>
+    
+    <div class="flex items-start justify-between gap-md group">
+      <div class="flex flex-col">
+        <span class="font-body-md text-on-surface flex items-center gap-xs">
+          AI enrichment <span class="font-data-mono text-[10px] bg-[#252525] px-1 rounded text-primary">Groq</span>
+        </span>
+        <span class="font-body-sm text-[12px] text-error mt-0.5 flex items-center gap-1" style="color: #ffb4ab">
+          <span class="material-symbols-outlined text-[14px]">key_off</span>
+          <span id="aiStatus">no key — open Settings</span>
+        </span>
+      </div>
+      <label class="relative inline-flex items-center cursor-pointer mt-1" id="sw-ai">
+        <input id="useAI" class="sr-only switch-peer" type="checkbox"/>
+        <div class="switch-bg w-8 h-4 bg-[#2a2a2a] rounded-full transition-colors duration-200">
+          <div class="switch-dot absolute top-[2px] left-[2px] bg-outline h-3 w-3 rounded-full transition-transform duration-200"></div>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <!-- Action Card -->
+  <div class="col-span-5 grid grid-cols-2 gap-sm">
+    <button id="scrapeBtn" class="bento-card rounded-lg p-sm flex flex-col items-center justify-center gap-xs bg-primary text-on-primary hover:bg-primary-fixed transition-colors border-none min-h-[80px] group cursor-pointer" style="background-color: #b6c8de; color: #203243;">
+      <span class="material-symbols-outlined text-[24px] group-hover:scale-110 transition-transform">bolt</span>
+      <span class="font-label-caps text-label-caps font-bold">Scrape now</span>
+    </button>
+    <button id="viewerBtn" class="bento-card rounded-lg p-sm flex flex-col items-center justify-center gap-xs hover:border-primary/50 transition-colors min-h-[80px] group text-on-surface cursor-pointer">
+      <span class="material-symbols-outlined text-[24px] text-primary group-hover:scale-110 transition-transform">folder_data</span>
+      <span class="font-label-caps text-label-caps">Open Viewer <span id="viewerBtnText" class="font-data-mono font-normal text-outline ml-1">(0)</span></span>
+    </button>
+  </div>
+
+  <div id="status" class="w-full col-span-12"></div>
+</main>
+
+<!-- Footer -->
+<footer class="mt-auto pt-sm flex gap-sm border-t border-[#2a2a2a]">
+  <button id="inspectBtn" class="flex-1 py-2 px-sm flex items-center justify-center gap-xs rounded border border-[#2a2a2a] text-outline hover:text-on-surface hover:border-outline-variant transition-colors bg-[#1a1a1a] cursor-pointer">
+    <span class="material-symbols-outlined text-[16px]">code</span>
+    <span class="font-label-caps text-[10px]">Inspect DOM</span>
+  </button>
+  <button id="settingsBtn" class="flex-1 py-2 px-sm flex items-center justify-center gap-xs rounded border border-[#2a2a2a] text-outline hover:text-on-surface hover:border-outline-variant transition-colors bg-[#1a1a1a] cursor-pointer">
+    <span class="material-symbols-outlined text-[16px]">settings</span>
+    <span class="font-label-caps text-[10px]">Settings</span>
+  </button>
+</footer>
+
+<script src="popup.js"></script>
 </body>
 </html>
